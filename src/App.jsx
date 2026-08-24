@@ -1,71 +1,56 @@
 import "./style.css";
-import "./style2.css";
-import { HashRouter, Routes, Route, Link, useNavigate, useLocation } from "react-router-dom";
-import { useState } from "react";
+import { HashRouter, Routes, Route } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { loadDB } from "./store";
+import { ToastProvider } from "./components/Toast";
+import Login from "./components/Login";
+import Layout from "./components/Layout";
 import Dashboard from "./components/Dashboard";
 import Clientes from "./components/Clientes";
-import Nuevo from "./components/Nuevo";
+import NuevoInforme from "./components/NuevoInforme";
 import Guardados from "./components/Guardados";
-import Admin from "./components/Admin";
-
-const menuItems = [
-  { key: "/", label: "Dashboard", icon: "📊" },
-  { key: "/clientes", label: "Mis Clientes", icon: "👥" },
-  { key: "/nuevo", label: "Nuevo Informe", icon: "➕" },
-  { key: "/guardados", label: "Informes Guardados", icon: "📁" },
-  { key: "/admin", label: "Administración", icon: "⚙️" },
-];
-
-function Layout() {
-  const location = useLocation();
-  const [nombre] = useState("Ejecutivo Proservis");
-
-  return (
-    <div className="app">
-      <header className="header">
-        <div className="header-container">
-          <Link to="/" className="header-logo">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-              <path d="M12 7v5l5 5" />
-            </svg>
-            Informe PT
-          </Link>
-          <div className="header-user">
-            <span>{nombre}</span>
-          </div>
-        </div>
-      </header>
-
-      <nav className="sidebar">
-        {menuItems.map(item => (
-          <Link
-            key={item.key}
-            to={item.key}
-            className={"sidebar-item" + (location.pathname === item.key ? " active" : "")}
-          >
-            {item.icon} {item.label}
-          </Link>
-        ))}
-      </nav>
-
-      <main className="main-content">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/clientes" element={<Clientes />} />
-          <Route path="/nuevo" element={<Nuevo />} />
-          <Route path="/guardados" element={<Guardados />} />
-          <Route path="/admin" element={<Admin />} />
-        </Routes>
-      </main>
-    </div>
-  );
-}
+import AdminClientes from "./components/AdminClientes";
+import AdminEjecutivos from "./components/AdminEjecutivos";
+import DriveExplorer from "./components/DriveExplorer";
 
 export default function App() {
+  const [ejId, setEjId] = useState(() => localStorage.getItem('ps_ej_activo') || null);
+
+  useEffect(() => { loadDB(); }, []);
+
+  const handleLogin = (id) => {
+    setEjId(id);
+    localStorage.setItem('ps_ej_activo', id);
+  };
+
+  const handleLogout = () => {
+    setEjId(null);
+    localStorage.removeItem('ps_ej_activo');
+  };
+
+  if (!ejId) {
+    return (
+      <ToastProvider>
+        <Login onLogin={handleLogin} />
+      </ToastProvider>
+    );
+  }
+
   return (
-    <HashRouter>
-      <Layout />
-    </HashRouter>
+    <ToastProvider>
+      <HashRouter>
+        <Routes>
+          <Route element={<Layout ejId={ejId} onLogout={handleLogout} />}>
+            <Route path="/" element={<Dashboard ejId={ejId} />} />
+            <Route path="/clientes" element={<Clientes ejId={ejId} />} />
+            <Route path="/nuevo" element={<NuevoInforme ejId={ejId} />} />
+            <Route path="/guardados" element={<Guardados />} />
+            <Route path="/aclientes" element={<AdminClientes />} />
+            <Route path="/aejecutivos" element={<AdminEjecutivos />} />
+            <Route path="/drive" element={<DriveExplorer />} />
+          </Route>
+        </Routes>
+      </HashRouter>
+    </ToastProvider>
   );
 }
