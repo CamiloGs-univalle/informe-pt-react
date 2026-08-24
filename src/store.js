@@ -31,6 +31,17 @@ const DEFAULT_CLIS = [
 
 let DB = { ejs: [], clis: [], infs: [] };
 
+// Load immediately on module import (synchronous)
+(function initDB() {
+  try {
+    const s = localStorage.getItem(STORAGE_KEY);
+    if (s) { const p = JSON.parse(s); DB.ejs = p.ejs || []; DB.clis = p.clis || []; DB.infs = p.infs || []; }
+  } catch(e) {}
+  if (!DB.ejs.length) DB.ejs = JSON.parse(JSON.stringify(DEFAULT_EJS));
+  if (!DB.clis.length) DB.clis = JSON.parse(JSON.stringify(DEFAULT_CLIS));
+  saveDB();
+})();
+
 function loadDB() {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
