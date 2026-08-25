@@ -3,6 +3,7 @@ import { GOOGLE_CLIENT_ID } from './config';
 const SCOPES = 'https://www.googleapis.com/auth/drive';
 let tokenClient = null;
 let onTokenCallback = null;
+let gapiInited = false;
 
 export async function loadGoogleScripts() {
   const loadScript = (src) => new Promise((resolve) => {
@@ -20,9 +21,10 @@ export function initGoogleAuth(onToken) {
   onTokenCallback = onToken;
   return new Promise((resolve) => {
     const check = setInterval(() => {
-      if (window.gapi && window.google) {
+      if (window.gapi && window.google && !gapiInited) {
         clearInterval(check);
-        window.gapi.load('client', async () => {
+        gapiInited = true;
+        window.gapi.load('client:picker', async () => {
           await window.gapi.client.init({
             discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
           });
@@ -68,46 +70,51 @@ export function clearAccessToken() {
 
 export function isConnected() { return !!getStoredToken(); }
 
-async function apiFetch(url, token) {
-  const tkn = token || getStoredToken();
-  const res = await fetch(url, { headers: { Authorization: 'Bearer ' + tkn } });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`API ${res.status}: ${text}`);
-  return JSON.parse(text);
+// Use gapi.client for authenticated requests
+async function gapiRequest(url) {
+  const token = getStoredToken();
+  if (!token) throw new Error('No token');
+  
+  const res = await window.gapi.client.request({ 
+    path: url,
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  return res.result;
 }
 
 export async function getDriveUserInfo(token) {
-  return await apiFetch('https://www.googleapis.com/drive/v3/about?fields=user', token);
+  return gapiRequest('/drive/v3/about?fields=user');
 }
 
-export async function listFolders(parentId = 'root', token) {
+export async function listFolders(parentId = 'root') {
   const q = `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,mimeType)&orderBy=name&pageSize=200`;
-  const data = await apiFetch(url, token);
-  return data.files || [];
+  const resp = await gapiRequest(
+    `/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,mimeType)&orderBy=name&pageSize=200`
+  );
+  return resp.files || [];
 }
 
-export async function listExcelFiles(parentId = 'root', token) {
+export async function listExcelFiles(parentId = 'root') {
   const q = `'${parentId}' in parents and trashed=false and (mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.ms-excel' or mimeType='text/csv' or name contains '.xlsx' or name contains '.xls' or name contains '.csv')`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name&pageSize=200`;
-  const data = await apiFetch(url, token);
-  return data.files || [];
+  const resp = await gapiRequest(
+    `/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name&pageSize=200`
+  );
+  return resp.files || [];
 }
 
-export async function downloadFile(fileId, token) {
-  const tkn = token || getStoredToken();
+export async function downloadFile(fileId) {
+  const token = getStoredToken();
   const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-    headers: { Authorization: 'Bearer ' + tkn }
+    headers: { Authorization: 'Bearer ' + token }
   });
   if (!res.ok) throw new Error('Download failed: ' + res.status);
   return res.arrayBuffer();
 }
 
-export async function listAllContents(parentId = 'root', token) {
-  const tkn = token || getStoredToken();
+export async function listAllContents(parentId = 'root') {
   const [folders, files] = await Promise.all([
-    listFolders(parentId, tkn),
-    listExcelFiles(parentId, tkn)
+    listFolders(parentId),
+    listExcelFiles(parentId)
   ]);
   return { folders, files };
 }

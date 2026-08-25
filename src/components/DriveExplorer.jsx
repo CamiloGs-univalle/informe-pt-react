@@ -3,7 +3,7 @@ import { toast } from "../store";
 import {
   loadGoogleScripts, initGoogleAuth, requestAccessToken,
   getStoredToken, setAccessToken, clearAccessToken, isConnected,
-  getDriveUserInfo, listFolders, listExcelFiles, downloadFile
+  getDriveUserInfo, listFolders, listExcelFiles, listAllContents, downloadFile
 } from "../gdrive";
 
 export default function DriveExplorer({ onFilesSelected }) {
@@ -31,13 +31,16 @@ export default function DriveExplorer({ onFilesSelected }) {
     try {
       setLoading(true);
       await loadGoogleScripts();
-      const about = await getDriveUserInfo(token);
+      const about = await getDriveUserInfo();
       setUser(about.user || about);
-      await loadFolderContent(token, 'root');
+      const { folders: f, files: fl } = await listAllContents('root');
+      setFolders(f);
+      setExcelFiles(fl);
+      setCurrentFolder('root');
       setLoading(false);
     } catch (e) {
-      console.error(e);
-      if (e.message.includes('401') || e.message.includes('403')) {
+      console.error('Drive init error:', e);
+      if (e.message.includes('401') || e.message.includes('403') || e.message.includes('token')) {
         clearAccessToken();
         setConnected(false);
         toast('Sesión expirada. Conecta de nuevo.');
@@ -77,32 +80,30 @@ export default function DriveExplorer({ onFilesSelected }) {
     toast('Desconectado de Google Drive');
   };
 
-  const loadFolderContent = async (token, folderId) => {
+  const loadFolderContent = async (folderId) => {
     setLoading(true);
     try {
-      const [folderList, fileList] = await Promise.all([
-        listFolders(folderId, token),
-        listExcelFiles(folderId, token)
-      ]);
-      setFolders(folderList);
-      setExcelFiles(fileList);
+      const { folders: f, files: fl } = await listAllContents(folderId);
+      setFolders(f);
+      setExcelFiles(fl);
       setCurrentFolder(folderId);
     } catch (e) {
-      toast('Error al cargar carpeta');
+      console.error('Load folder error:', e);
+      toast('Error al cargar carpeta: ' + e.message);
     }
     setLoading(false);
   };
 
   const navigateToFolder = async (folder) => {
     setPath([...path, { id: folder.id, name: folder.name }]);
-    await loadFolderContent(null, folder.id);
+    await loadFolderContent(folder.id);
     setTab('browse');
   };
 
   const navigateToBreadcrumb = async (idx) => {
     const target = path[idx];
     setPath(path.slice(0, idx + 1));
-    await loadFolderContent(null, target.id);
+    await loadFolderContent(target.id);
   };
 
   const toggleSelect = (file) => {
