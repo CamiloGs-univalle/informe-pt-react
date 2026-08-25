@@ -128,13 +128,24 @@ export default function DriveExplorer({ onFilesSelected }) {
     try {
       const files = [];
       for (const sf of selected) {
-        const buf = await downloadFile(sf.id);
-        const ext = sf.name.split('.').pop().toLowerCase();
-        const mime = ext === 'csv' ? 'text/csv' :
-          ext === 'xls' ? 'application/vnd.ms-excel' :
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        const buf = await downloadFile(sf.id, sf.mimeType);
+        let ext = sf.name.split('.').pop().toLowerCase();
+        let mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        
+        // Google Sheets exports as xlsx
+        if (sf.mimeType === 'application/vnd.google-apps.spreadsheet') {
+          ext = 'xlsx';
+          mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        } else if (ext === 'csv') {
+          mime = 'text/csv';
+        } else if (ext === 'xls') {
+          mime = 'application/vnd.ms-excel';
+        }
+        
+        // Ensure filename has correct extension
+        const fileName = sf.name.endsWith(`.${ext}`) ? sf.name : `${sf.name}.${ext}`;
         const blob = new Blob([buf], { type: mime });
-        files.push(new File([blob], sf.name, { type: mime }));
+        files.push(new File([blob], fileName, { type: mime }));
       }
       onFilesSelected(files);
       toast(`${files.length} archivo(s) descargado(s) y procesado(s)`);
@@ -279,23 +290,31 @@ export default function DriveExplorer({ onFilesSelected }) {
                 No hay archivos Excel en esta carpeta. Navega a otra carpeta o sube archivos a tu Drive.
               </div>
             )}
-            {excelFiles.map(f => (
+            {excelFiles.map(f => {
+              const isGoogleSheet = f.mimeType === 'application/vnd.google-apps.spreadsheet';
+              const isSelected = selected.find(s => s.id === f.id);
+              return (
               <div key={f.id} className="clcard" onClick={() => toggleSelect(f)}
-                style={{ cursor: 'pointer', borderColor: selected.find(s => s.id === f.id) ? 'var(--vd)' : 'transparent',
-                  background: selected.find(s => s.id === f.id) ? 'var(--vc)' : '#fff', transition: 'all .15s' }}>
+                style={{ cursor: 'pointer', borderColor: isSelected ? 'var(--vd)' : 'transparent',
+                  background: isSelected ? 'var(--vc)' : '#fff', transition: 'all .15s' }}>
                 <div className="clav" style={{
-                  background: selected.find(s => s.id === f.id) ? 'var(--vd)' : 'var(--vc)',
-                  color: selected.find(s => s.id === f.id) ? '#fff' : 'var(--vd)',
+                  background: isSelected ? 'var(--vd)' : isGoogleSheet ? '#0F9D58' : '#1A73E8',
+                  color: '#fff',
                   transition: 'all .15s'
                 }}>
-                  {selected.find(s => s.id === f.id) ? '✓' : '📊'}
+                  {isSelected ? '✓' : isGoogleSheet ? '📗' : '📊'}
                 </div>
                 <div style={{ flex: 1 }}>
                   <div className="clnm">{f.name}</div>
-                  <div className="clmt">{f.size ? (f.size / 1024).toFixed(1) + ' KB' : '—'} · {f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('es-CO') : ''}</div>
+                  <div className="clmt">
+                    {isGoogleSheet ? 'Google Sheet' : f.name.split('.').pop().toUpperCase()} 
+                    {f.size ? ' · ' + (f.size / 1024).toFixed(1) + ' KB' : ''} 
+                    {f.modifiedTime ? ' · ' + new Date(f.modifiedTime).toLocaleDateString('es-CO') : ''}
+                  </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {selected.length > 0 && (

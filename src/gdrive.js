@@ -95,16 +95,40 @@ export async function listFolders(parentId = 'root') {
 }
 
 export async function listExcelFiles(parentId = 'root') {
-  const q = `'${parentId}' in parents and trashed=false and (mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.ms-excel' or mimeType='text/csv' or name contains '.xlsx' or name contains '.xls' or name contains '.csv')`;
+  const q = `'${parentId}' in parents and trashed=false and (
+    mimeType='application/vnd.google-apps.spreadsheet' or
+    mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or
+    mimeType='application/vnd.ms-excel' or
+    mimeType='text/csv' or
+    name contains '.xlsx' or
+    name contains '.xls' or
+    name contains '.csv' or
+    name contains 'headcount' or
+    name contains 'Headcount' or
+    name contains 'seleccion' or
+    name contains 'Selección' or
+    name contains 'rotacion' or
+    name contains 'Rotación' or
+    name contains 'SST' or
+    name contains 'nomina' or
+    name contains 'Nómina'
+  )`;
   const resp = await gapiRequest(
     `/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name&pageSize=200`
   );
   return resp.files || [];
 }
 
-export async function downloadFile(fileId) {
+export async function downloadFile(fileId, mimeType) {
   const token = getStoredToken();
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+  let url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+  
+  // If it's a Google Sheet, export as xlsx
+  if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+    url = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`;
+  }
+  
+  const res = await fetch(url, {
     headers: { Authorization: 'Bearer ' + token }
   });
   if (!res.ok) throw new Error('Download failed: ' + res.status);
