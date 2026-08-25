@@ -1,119 +1,76 @@
 import { useState, useEffect } from "react";
+import { getEjs, saveEj, deleteEj, getCliCountForEj, getInfCountForEj } from "../store";
 import Modal from "./Modal";
-import { getEjs, saveEj, deleteEj as delEj } from "../store";
 
 export default function AdminEjecutivos() {
-  const [modalOpen, setModalOpen] = useState(false);
+  const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState(null);
   const [list, setList] = useState([]);
-  const [form, setForm] = useState({ nom: "", email: "", zona: "" });
+  const [form, setForm] = useState({ nom: '', email: '', zona: '' });
 
-  const reload = () => {
-    setList(getEjs());
-  };
-  useEffect(() => {
-    reload();
-  }, []);
+  useEffect(() => { setList(getEjs()); }, []);
 
-  const openNew = () => {
-    setEditId(null);
-    setForm({ nom: "", email: "", zona: "" });
-    setModalOpen(true);
-  };
-  const openEdit = (id) => {
-    const e = getEjs().find((x) => x.id === id);
-    if (e) {
-      setEditId(id);
-      setForm({ nom: e.nom || "", email: e.email || "", zona: e.zona || "" });
-      setModalOpen(true);
-    }
-  };
+  const openNew = () => { setForm({ nom: '', email: '', zona: '' }); setEditId(null); setModal(true); };
+  const openEdit = (e) => { setForm({ nom: e.nom, email: e.email || '', zona: e.zona || '' }); setEditId(e.id); setModal(true); };
 
   const handleSave = () => {
     if (!form.nom.trim()) return;
     saveEj({ ...form, id: editId });
-    setModalOpen(false);
-    reload();
+    setList(getEjs());
+    setModal(false);
   };
 
   const handleDelete = (id) => {
-    if (!confirm("¿Eliminar este ejecutivo?")) return;
-    delEj(id);
-    reload();
+    if (confirm('¿Eliminar este ejecutivo?')) { deleteEj(id); setList(getEjs()); }
   };
 
   return (
     <div>
-      <div className="ph">
-        <h2>Ejecutivos</h2>
-        <button className="btn bvd" onClick={openNew}>
-          + Nuevo Ejecutivo
-        </button>
+      <div className="ph" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>Ejecutivos</div>
+        <button className="btn bvd" onClick={openNew}>+ Nuevo Ejecutivo</button>
       </div>
-      <table className="tbl">
-        <thead>
-          <tr>
-            <th>Nombre</th>
-            <th>Email</th>
-            <th>Zona</th>
-            <th>Acciones</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((e) => (
-            <tr key={e.id}>
-              <td>{e.nom}</td>
-              <td>{e.email || "—"}</td>
-              <td>{e.zona || "—"}</td>
-              <td>
-                <button
-                  className="btn bgh bsm"
-                  onClick={() => openEdit(e.id)}
-                >
-                  ✏️ Editar
-                </button>{" "}
-                <button
-                  className="btn brow bsm"
-                  onClick={() => handleDelete(e.id)}
-                >
-                  🗑️ Eliminar
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="ps">Total: {list.length} ejecutivo{list.length !== 1 ? 's' : ''}</div>
 
-      <Modal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title={editId ? "Editar Ejecutivo" : "Nuevo Ejecutivo"}
-      >
-        <label className="flabel">Nombre</label>
-        <input
-          className="finput"
-          value={form.nom}
-          onChange={(e) => setForm({ ...form, nom: e.target.value })}
-        />
-        <label className="flabel">Email</label>
-        <input
-          className="finput"
-          value={form.email}
-          onChange={(e) => setForm({ ...form, email: e.target.value })}
-        />
-        <label className="flabel">Zona</label>
-        <input
-          className="finput"
-          value={form.zona}
-          onChange={(e) => setForm({ ...form, zona: e.target.value })}
-        />
-        <div className="brow">
-          <button className="btn bvd" onClick={handleSave}>
-            Guardar
-          </button>
-          <button className="btn bgh" onClick={() => setModalOpen(false)}>
-            Cancelar
-          </button>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <table className="tbl">
+          <thead>
+            <tr><th>Nombre</th><th>Email</th><th>Zona</th><th>Clientes</th><th>Informes</th><th>Acciones</th></tr>
+          </thead>
+          <tbody>
+            {list.map(e => (
+              <tr key={e.id}>
+                <td style={{ fontWeight: 600 }}>{e.nom}</td>
+                <td>{e.email || '—'}</td>
+                <td>{e.zona || '—'}</td>
+                <td><span className="b bok">{getCliCountForEj(e.id)}</span></td>
+                <td><span className="b bwn">{getInfCountForEj(e.id)}</span></td>
+                <td>
+                  <button className="btn bgh bsm" onClick={() => openEdit(e)} style={{ marginRight: 4 }}>✏️ Editar</button>
+                  <button className="btn bro bsm" onClick={() => handleDelete(e.id)}>🗑️</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <Modal open={modal} onClose={() => setModal(false)} title={editId ? 'Editar Ejecutivo' : 'Nuevo Ejecutivo'}>
+        <div style={{ marginBottom: 12 }}>
+          <label className="flabel">Nombre *</label>
+          <input className="finput" value={form.nom} onChange={e => setForm({...form, nom: e.target.value})} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label className="flabel">Email</label>
+          <input className="finput" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label className="flabel">Zona</label>
+          <input className="finput" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} placeholder="Ciudad o región" />
+        </div>
+        <div className="brow" style={{ marginTop: 0 }}>
+          <button className="btn bvd" onClick={handleSave}>Guardar</button>
+          <button className="btn bgh" onClick={() => setModal(false)}>Cancelar</button>
         </div>
       </Modal>
     </div>

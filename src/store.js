@@ -76,6 +76,23 @@ function saveCli(data) {
 }
 function deleteCli(id) { DB.clis = DB.clis.filter(c => c.id !== id); saveDB(); }
 
+function saveCliFolder(cliId, folderPath) {
+  const c = DB.clis.find(x => x.id === cliId);
+  if (c) { c.driveFolder = folderPath; saveDB(); }
+}
+function getCliFolder(cliId) {
+  const c = DB.clis.find(x => x.id === cliId);
+  return c ? c.driveFolder : '';
+}
+
+function getInfsForPeriodo(per) {
+  return DB.infs.filter(i => i.per === per);
+}
+
+function getInfsForCliPeriodo(cliId, per) {
+  return DB.infs.filter(i => i.cliId === cliId && i.per === per);
+}
+
 function saveInf(data) {
   if (!data.id) data.id = 'i' + Date.now();
   if (!data.ts) data.ts = new Date().toISOString();
@@ -130,6 +147,8 @@ export {
   loadDB, saveDB, getEjs, getClis, getInfs, getEj, getCli,
   saveEj, deleteEj, saveCli, deleteCli, saveInf, deleteInf,
   getInfCountForCli, getInfCountForEj, getCliCountForEj,
-  getClisForEj, getInfsForCli, fmtPer, fmtPerLong, toast, fmtSize, downloadHTML,
+  getClisForEj, getInfsForCli, getInfsForPeriodo, getInfsForCliPeriodo,
+  saveCliFolder, getCliFolder,
+  fmtPer, fmtPerLong, toast, fmtSize, downloadHTML,
   MOTIVOS_PRE, FOTOLABELS
 };

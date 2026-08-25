@@ -1,107 +1,77 @@
 import { useState, useEffect } from "react";
-import { getInfs, getClis, getCli, downloadHTML } from "../store";
+import { getInfs, getClis, getCli, fmtPer, fmtPerLong, toast } from "../store";
+import { generatePDF, downloadHTML } from "../pdfGenerator";
 
 export default function Guardados() {
-  const [busq, setBusq] = useState("");
-  const [mes, setMes] = useState("");
-  const [infs, setInfs] = useState([]);
+  const [search, setSearch] = useState('');
+  const [month, setMonth] = useState('');
+  const [lista, setLista] = useState([]);
 
   useEffect(() => {
-    const raw = getInfs();
+    const infs = getInfs();
     const clis = getClis();
-    const merged = raw.map(inf => {
-      const cli = getCli(inf.cliId);
-      return { ...inf, cli };
-    }).reverse();
-    setInfs(merged);
+    const merged = infs.map(inf => {
+      const cli = clis.find(c => c.id === inf.cliId);
+      return { ...inf, cliNom: cli?.nom || inf.cliNom || '—', cliMarca: cli?.marca || '' };
+    }).sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+    setLista(merged);
   }, []);
 
-  const filtrados = infs.filter(inf => {
-    const nm = inf.cli ? inf.cli.nom.toLowerCase() : "";
-    return (
-      (!busq || nm.includes(busq.toLowerCase())) &&
-      (!mes || inf.per === mes)
-    );
+  const filtered = lista.filter(inf => {
+    const matchSearch = !search || inf.cliNom.toLowerCase().includes(search.toLowerCase()) || (inf.per || '').includes(search);
+    const matchMonth = !month || inf.per === month;
+    return matchSearch && matchMonth;
   });
 
-  const descInf = inf => {
-    const nombre = inf.cli
-      ? inf.cli.nom.replace(/\s+/g, "_")
-      : "Cliente";
-    downloadHTML(inf.html, `Informe_${nombre}_${inf.per}.html`);
+  const handleDownloadHTML = (inf) => {
+    if (inf.html) {
+      const filename = `Informe_${inf.cliNom}_${fmtPer(inf.per)}.html`;
+      downloadHTML(inf.html, filename);
+      toast('HTML descargado');
+    }
+  };
+
+  const handleDownloadPDF = async (inf) => {
+    if (inf.html) {
+      const filename = `Informe_${inf.cliNom}_${fmtPer(inf.per)}.pdf`;
+      try {
+        await generatePDF(inf.html, filename);
+        toast('PDF descargado');
+      } catch(e) {
+        toast('Error al generar PDF');
+      }
+    }
   };
 
   return (
     <div>
-      <div className="ph">
-        <h2>Informes Guardados</h2>
-        <p className="ps">Total: {filtrados.length} informes</p>
+      <div className="ph">Informes Guardados</div>
+      <div className="ps">Total: {filtered.length} informe{filtered.length !== 1 ? 's' : ''}</div>
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+        <input className="finput" type="text" placeholder="Buscar por cliente o período..." value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 280 }} />
+        <input className="finput" type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ maxWidth: 180 }} />
       </div>
 
-      <div className="clcard" style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <input
-          className="finput"
-          type="text"
-          placeholder="Buscar por nombre..."
-          value={busq}
-          onChange={e => setBusq(e.target.value)}
-        />
-        <input
-          className="finput"
-          type="month"
-          value={mes}
-          onChange={e => setMes(e.target.value)}
-        />
-      </div>
-
-      {filtrados.length === 0 && (
-        <p style={{ color: "var(--grt)", fontSize: 13 }}>
-          No hay informes guardados aún.
-        </p>
+      {filtered.length === 0 && (
+        <div className="card">
+          <div className="alrt aam">📋 No hay informes guardados aún. Crea uno en "Nuevo informe".</div>
+        </div>
       )}
 
-      {filtrados.map(inf => {
-        const initials = inf.cli
-          ? inf.cli.nom.slice(0, 2).toUpperCase()
-          : "??";
-        const periodLabel = inf.per
-          ? (() => {
-              const [y, m] = inf.per.split("-");
-              const meses = [
-                "Ene", "Feb", "Mar", "Abr", "May", "Jun",
-                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"
-              ];
-              return `${meses[+m - 1]} ${y}`;
-            })()
-          : "—";
-        const fecha = inf.ts
-          ? new Date(inf.ts).toLocaleDateString("es-CO")
-          : "";
-
-        return (
-          <div key={inf.id} className="card">
-            <div className="clcard">
-              <div className="clav">{initials}</div>
-              <div>
-                <div className="clnm">
-                  {inf.cli ? inf.cli.nom : "Cliente"}
-                </div>
-                <div className="clmt">
-                  {periodLabel} · {fecha}
-                </div>
-              </div>
-              <div className="clri">
-                <button
-                  className="btn bvd bsm"
-                  onClick={() => descInf(inf)}
-                >
-                  📥 Descargar
-                </button>
-              </div>
-            </div>
+      {filtered.map(inf => (
+        <div key={inf.id} className="clcard" style={{ cursor: 'default' }}>
+          <div className="clav">{inf.cliNom.slice(0, 2).toUpperCase()}</div>
+          <div>
+            <div className="clnm">{inf.cliNom}{inf.cliMarca ? ' · ' + inf.cliMarca : ''}</div>
+            <div className="clmt">{fmtPerLong(inf.per)} · {inf.ejNom || '—'} · {new Date(inf.ts).toLocaleDateString('es-CO')}</div>
           </div>
-        );
-      })}
+          <div className="clri">
+            <button className="btn bvd bsm" onClick={() => handleDownloadHTML(inf)} disabled={!inf.html}>📄 HTML</button>
+            <button className="btn bam bsm" onClick={() => handleDownloadPDF(inf)} disabled={!inf.html}>📑 PDF</button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
