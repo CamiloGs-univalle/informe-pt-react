@@ -317,6 +317,78 @@ export default function NuevoInforme({ ejId }) {
         </div>
       )}
 
+      {/* ═══ STEP 2 (Auto): Revisar datos extraídos ═══ */}
+      {step === 2 && mode === 'auto' && (
+        <div>
+          {dataReport && (
+            <div className="card" style={{ background: dataReport.missing.length ? 'var(--amc)' : 'var(--vc)', border: dataReport.missing.length ? '1px solid #e8d78a' : '1px solid #C8E6D4' }}>
+              <div className="ct">{dataReport.missing.length ? '⚠️ Datos parciales' : '✅ Todos los datos encontrados'}</div>
+              {dataReport.available.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>Encontrados:</div>
+                  {dataReport.available.map((a, i) => (
+                    <div key={i} style={{ fontSize: 12, color: 'var(--vdo)', padding: '2px 0' }}>✓ {a.section} — {a.fields.join(', ')}</div>
+                  ))}
+                </div>
+              )}
+              {dataReport.missing.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#7A6010', marginBottom: 4 }}>Faltantes (se pueden llenar después):</div>
+                  {dataReport.missing.map((m, i) => (
+                    <div key={i} style={{ fontSize: 12, color: '#7A6010', padding: '2px 0' }}>• {m}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!dataReport && (
+            <div className="card">
+              <div className="ct">🔍 Revisar datos extraídos</div>
+              <div style={{ fontSize: 12, color: 'var(--grt)', textAlign: 'center', padding: 20 }}>
+                No hay datos para revisar. Sube archivos Excel en el paso anterior.
+              </div>
+            </div>
+          )}
+
+          <div className="card">
+            <div className="ct">📋 Datos extraídos</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+              <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>👥 Headcount</div>
+                <div style={{ fontSize: 12, color: 'var(--tx)' }}>
+                  Inicio: {headcount.inicio} | Ingresos: {headcount.ingresos} | Retiros: {headcount.retiros}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--vd)', fontWeight: 700 }}>
+                  Cierre: {headcount.inicio + headcount.ingresos - headcount.retiros}
+                </div>
+              </div>
+              <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>🎯 Selección</div>
+                <div style={{ fontSize: 12, color: 'var(--tx)' }}>{seleccion.length} RQ(s) encontrado(s)</div>
+              </div>
+              <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>↻ Rotación</div>
+                <div style={{ fontSize: 12, color: 'var(--tx)' }}>{rotacion.length} motivo(s) encontrado(s)</div>
+              </div>
+              <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>🛡️ SST</div>
+                <div style={{ fontSize: 12, color: 'var(--tx)' }}>{sst.casos?.length || 0} caso(s)</div>
+              </div>
+              <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>💰 Nómina</div>
+                <div style={{ fontSize: 12, color: 'var(--tx)' }}>Liquidados: {nomina.liquidados || 0}</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
+            <button className="btn bgh" onClick={() => setStep(1)}>← Volver a archivos</button>
+            <button className="btn bvd" onClick={() => setStep(3)}>Continuar a ajustar →</button>
+          </div>
+        </div>
+      )}
+
       {/* ═══ STEP 1 (Manual): Headcount ═══ */}
       {step === 1 && mode === 'manual' && (
         <div className="card">
