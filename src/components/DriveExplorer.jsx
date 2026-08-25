@@ -1,137 +1,114 @@
-import { useState, useEffect } from "react";
+import { useState, useRef } from "react";
 import { toast } from "../store";
-import { initGapi, initGis, requestDriveAccess, listDriveFolders, listDriveFiles, downloadDriveFile, isDriveConnected, setDriveToken, getDriveToken, clearDriveToken, EXCEL_MIMES } from "../driveAuth";
 
 export default function DriveExplorer({ onFilesSelected }) {
   const [connected, setConnected] = useState(false);
-  const [token, setToken] = useState(null);
-  const [folders, setFolders] = useState([]);
+  const [folderName, setFolderName] = useState('');
   const [files, setFiles] = useState([]);
-  const [currentFolder, setCurrentFolder] = useState(null);
-  const [path, setPath] = useState([{ id: 'root', name: 'Mi Drive' }]);
   const [selected, setSelected] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState('folders');
+  const folderRef = useRef(null);
 
-  useEffect(() => {
-    const t = getDriveToken();
-    if (t) { setToken(t); setConnected(true); loadFolders(t); }
-  }, []);
+  const handleConnect = () => {
+    folderRef.current.click();
+  };
 
-  const handleConnect = async () => {
-    if (!document.querySelector('script[src*="apis.google.com/js/api.js"]')) {
-      await initGapi();
+  const handleFolderSelect = async (e) => {
+    const fileList = Array.from(e.target.files);
+    if (!fileList.length) return;
+
+    setLoading(true);
+    const folderPath = fileList[0].webkitRelativePath.split('/')[0];
+    setFolderName(folderPath);
+
+    const excelFiles = fileList.filter(f =>
+      f.name.match(/\.(xlsx|xls|csv)$/i) && !f.name.startsWith('~$')
+    );
+
+    if (!excelFiles.length) {
+      toast('No se encontraron archivos Excel en esta carpeta');
+      setLoading(false);
+      return;
     }
-    if (!document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
-      initGis((accessToken) => {
-        setToken(accessToken);
-        setConnected(true);
-        setDriveToken(accessToken);
-        toast('Conectado a Google Drive');
-        loadFolders(accessToken);
-      });
-    }
-    requestDriveAccess();
+
+    setFiles(excelFiles.map(f => ({
+      name: f.name,
+      size: f.size,
+      path: f.webkitRelativePath,
+      file: f,
+      selected: false
+    })));
+    setConnected(true);
+    setLoading(false);
+    toast(`${excelFiles.length} archivos Excel encontrados en "${folderPath}"`);
+  };
+
+  const toggleSelect = (idx) => {
+    setFiles(prev => prev.map((f, i) => i === idx ? { ...f, selected: !f.selected } : f));
+    setSelected(prev => {
+      const file = files[idx];
+      if (file.selected) return prev.filter(f => f !== file);
+      return [...prev, file];
+    });
+  };
+
+  const selectAll = () => {
+    const allSelected = files.every(f => f.selected);
+    setFiles(prev => prev.map(f => ({ ...f, selected: !allSelected })));
+    setSelected(allSelected ? [] : [...files]);
+  };
+
+  const handleUseFiles = () => {
+    const toUse = files.filter(f => f.selected);
+    if (!toUse.length) { toast('Selecciona al menos un archivo'); return; }
+    onFilesSelected(toUse.map(f => f.file));
+    toast(`${toUse.length} archivo(s) enviado(s) al parser`);
   };
 
   const handleDisconnect = () => {
-    clearDriveToken();
-    setToken(null);
     setConnected(false);
-    setFolders([]);
+    setFolderName('');
     setFiles([]);
     setSelected([]);
-    toast('Desconectado de Google Drive');
-  };
-
-  const loadFolders = async (tkn, parentId = 'root') => {
-    setLoading(true);
-    try {
-      const data = await listDriveFolders(tkn, parentId);
-      setFolders(data);
-    } catch(e) { toast('Error al cargar carpetas'); }
-    setLoading(false);
-  };
-
-  const loadFiles = async (tkn, folderId) => {
-    setLoading(true);
-    try {
-      const data = await listDriveFiles(tkn, folderId, EXCEL_MIMES);
-      setFiles(data);
-    } catch(e) { toast('Error al cargar archivos'); }
-    setLoading(false);
-  };
-
-  const navigateTo = async (folder) => {
-    setCurrentFolder(folder);
-    setPath([...path, { id: folder.id, name: folder.name }]);
-    await loadFolders(token, folder.id);
-    await loadFiles(token, folder.id);
-    setTab('files');
-  };
-
-  const navigateToPath = async (idx) => {
-    const target = path[idx];
-    setPath(path.slice(0, idx + 1));
-    setCurrentFolder(idx === 0 ? null : target);
-    await loadFolders(token, target.id);
-    await loadFiles(token, target.id);
-  };
-
-  const toggleSelect = (file) => {
-    setSelected(prev =>
-      prev.find(f => f.id === file.id)
-        ? prev.filter(f => f.id !== file.id)
-        : [...prev, file]
-    );
-  };
-
-  const handleUseFiles = async () => {
-    if (!selected.length) { toast('Selecciona al menos un archivo'); return; }
-    setLoading(true);
-    const downloaded = [];
-    for (const file of selected) {
-      try {
-        const buf = await downloadDriveFile(token, file.id);
-        const blob = new Blob([buf], {
-          type: file.mimeType === 'text/csv' ? 'text/csv' :
-                 file.mimeType.includes('openxmlformats') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
-                 'application/vnd.ms-excel'
-        });
-        const ext = file.name.split('.').pop();
-        downloaded.push(new File([blob], file.name, { type: blob.type }));
-      } catch(e) { toast('Error al descargar ' + file.name); }
-    }
-    setLoading(false);
-    if (onFilesSelected) onFilesSelected(downloaded);
-    toast(`${downloaded.length} archivo(s) descargado(s)`);
   };
 
   if (!connected) {
     return (
       <div>
-        <div className="ph">Google Drive</div>
-        <div className="ps">Conecta tu cuenta para acceder a los archivos Excel directamente</div>
-        <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>📁</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tx)', marginBottom: 8 }}>Conecta tu Google Drive</div>
-          <div style={{ fontSize: 13, color: 'var(--grt)', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
-            Al conectar, podrás navegar tus carpetas y seleccionar los archivos Excel con la información de tus clientes para generar informes automáticamente.
+        <div className="card" style={{ textAlign: 'center', padding: 30 }}>
+          <div style={{ fontSize: 42, marginBottom: 12 }}>📂</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--tx)', marginBottom: 6 }}>
+            Conecta tu carpeta de informes
           </div>
-          <button className="btn bvd" onClick={handleConnect} style={{ padding: '14px 28px', fontSize: 15 }}>
-            🔗 Conectar con Google Drive
+          <div style={{ fontSize: 12, color: 'var(--grt)', marginBottom: 16, maxWidth: 420, margin: '0 auto 16px' }}>
+            Selecciona la carpeta de tu PC donde tienes los archivos Excel con la información de tus clientes. El sistema leerá todos los Excel automáticamente.
+          </div>
+          <button className="btn bvd" onClick={handleConnect} style={{ padding: '14px 28px', fontSize: 14 }}>
+            📁 Seleccionar carpeta
           </button>
-          <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 12 }}>
-            Se abrirá una ventana de Google para autorizar el acceso
+          <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple style={{ display: 'none' }} onChange={handleFolderSelect} />
+          {loading && <div style={{ fontSize: 12, color: 'var(--grt)', marginTop: 10 }}>⏳ Leyendo archivos...</div>}
+        </div>
+
+        <div className="card">
+          <div className="ct">💡 ¿Cómo funciona?</div>
+          <div style={{ fontSize: 12, color: 'var(--grt)', lineHeight: 1.8 }}>
+            <strong>1.</strong> Haz clic en "Seleccionar carpeta" y elige la carpeta donde tienes tus Excel.<br/>
+            <strong>2.</strong> El sistema muestra todos los archivos Excel encontrados.<br/>
+            <strong>3.</strong> Seleccionas cuáles usar y el sistema extrae los datos automáticamente.<br/>
+            <strong>4.</strong> Revisas, ajustas y generas el informe final.
           </div>
         </div>
+
         <div className="card">
-          <div className="ct">¿Cómo funciona?</div>
+          <div className="ct">📋 ¿Qué archivos necesito?</div>
           <div style={{ fontSize: 12, color: 'var(--grt)', lineHeight: 1.8 }}>
-            <strong>1.</strong> Haz clic en "Conectar con Google Drive" y autoriza el acceso.<br/>
-            <strong>2.</strong> Navega por tus carpetas y selecciona los archivos Excel.<br/>
-            <strong>3.</strong> Los datos se extraen automáticamente y se llenan el formulario.<br/>
-            <strong>4.</strong> Revisa, ajusta y genera el informe final.
+            Tus Excel deben tener hojas con nombres como:<br/>
+            • <strong>Headcount</strong> o "Personal" → Movimiento de personal<br/>
+            • <strong>Selección</strong> o "RQ" → Requerimientos y contrataciones<br/>
+            • <strong>Rotación</strong> o "Retiros" → Motivos de salida<br/>
+            • <strong>SST</strong> o "Seguridad" → Accidentes e inducciones<br/>
+            • <strong>Nómina</strong> o "Liquidaciones" → Datos de nómina
           </div>
         </div>
       </div>
@@ -140,93 +117,47 @@ export default function DriveExplorer({ onFilesSelected }) {
 
   return (
     <div>
-      <div className="ph" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>Google Drive</div>
-        <button className="btn bro bsm" onClick={handleDisconnect}>Desconectar</button>
+      <div className="card" style={{ background: 'var(--vc)', border: '1px solid #C8E6D4' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--vdo)' }}>📁 {folderName}</div>
+            <div style={{ fontSize: 12, color: 'var(--grt)' }}>{files.length} archivos Excel encontrados · {selected.length} seleccionados</div>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn bgh bsm" onClick={() => folderRef.current.click()}>Cambiar carpeta</button>
+            <button className="btn bro bsm" onClick={handleDisconnect}>✕ Desconectar</button>
+          </div>
+        </div>
+        <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple style={{ display: 'none' }} onChange={handleFolderSelect} />
       </div>
-      <div className="ps">Navega y selecciona los archivos Excel para el informe</div>
 
-      {/* Path breadcrumb */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 14, flexWrap: 'wrap' }}>
-        {path.map((p, i) => (
-          <span key={p.id}>
-            {i > 0 && <span style={{ color: 'var(--grt)', margin: '0 4px' }}>/</span>}
-            <button className="btn bgh bsm" onClick={() => navigateToPath(i)} style={{ padding: '4px 10px' }}>
-              {i === 0 ? '📁' : ''} {p.name}
-            </button>
-          </span>
+      <div className="card">
+        <div className="ct" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>📊 Archivos Excel</span>
+          <button className="btn bgh bsm" onClick={selectAll}>{files.every(f => f.selected) ? 'Desmarcar todos' : 'Seleccionar todos'}</button>
+        </div>
+        {files.map((f, i) => (
+          <div key={i} className="clcard" onClick={() => toggleSelect(i)}
+            style={{ cursor: 'pointer', borderColor: f.selected ? 'var(--vd)' : 'transparent',
+              background: f.selected ? 'var(--vc)' : '#fff', transition: 'all .15s' }}>
+            <div className="clav" style={{ background: f.selected ? 'var(--vd)' : 'var(--vc)',
+              color: f.selected ? '#fff' : 'var(--vd)', transition: 'all .15s' }}>
+              {f.selected ? '✓' : '📊'}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div className="clnm">{f.name}</div>
+              <div className="clmt">{(f.size / 1024).toFixed(1)} KB · {f.path}</div>
+            </div>
+          </div>
         ))}
       </div>
 
-      {/* Tabs */}
-      <div className="modo-tabs" style={{ marginBottom: 14 }}>
-        <div className={"modo-tab" + (tab === 'folders' ? ' on' : '')} onClick={() => setTab('folders')}>
-          <span className="mt-ico">📂</span>
-          <div className="mt-tit">Carpetas</div>
-          <div className="mt-sub">{folders.length} carpetas</div>
-        </div>
-        <div className={"modo-tab" + (tab === 'files' ? ' on' : '')} onClick={() => setTab('files')}>
-          <span className="mt-ico">📊</span>
-          <div className="mt-tit">Archivos Excel</div>
-          <div className="mt-sub">{files.length} archivos · {selected.length} seleccionados</div>
-        </div>
-      </div>
-
-      {loading && <div className="alrt aam">⏳ Cargando...</div>}
-
-      {/* Folders tab */}
-      {tab === 'folders' && (
-        <div className="card">
-          <div className="ct">📂 Carpetas</div>
-          {folders.length === 0 && !loading && <div style={{ fontSize: 12, color: 'var(--grt)' }}>No hay carpetas en esta ubicación</div>}
-          {folders.map(f => (
-            <div key={f.id} className="clcard" onClick={() => navigateTo(f)} style={{ cursor: 'pointer' }}>
-              <div className="clav" style={{ background: 'var(--amc)', color: 'var(--osc)' }}>📁</div>
-              <div>
-                <div className="clnm">{f.name}</div>
-                <div className="clmt">{new Date(f.modifiedTime).toLocaleDateString('es-CO')}</div>
-              </div>
-              <div className="clri"><span style={{ fontSize: 11, color: 'var(--grt)' }}>→ Abrir</span></div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Files tab */}
-      {tab === 'files' && (
-        <div>
-          <div className="card">
-            <div className="ct">📊 Archivos Excel disponibles</div>
-            {files.length === 0 && !loading && (
-              <div style={{ fontSize: 12, color: 'var(--grt)', textAlign: 'center', padding: 20 }}>
-                No hay archivos Excel en esta carpeta. Sube archivos Excel (.xlsx) aquí o en otra carpeta.
-              </div>
-            )}
-            {files.map(f => (
-              <div key={f.id} className="clcard" onClick={() => toggleSelect(f)}
-                style={{ cursor: 'pointer', borderColor: selected.find(s => s.id === f.id) ? 'var(--vd)' : 'transparent',
-                  background: selected.find(s => s.id === f.id) ? 'var(--vc)' : '#fff' }}>
-                <div className="clav" style={{ background: selected.find(s => s.id === f.id) ? 'var(--vd)' : 'var(--vc)',
-                  color: selected.find(s => s.id === f.id) ? '#fff' : 'var(--vd)' }}>
-                  {selected.find(s => s.id === f.id) ? '✓' : '📊'}
-                </div>
-                <div>
-                  <div className="clnm">{f.name}</div>
-                  <div className="clmt">{f.size ? (f.size / 1024).toFixed(1) + ' KB' : '—'} · {new Date(f.modifiedTime).toLocaleDateString('es-CO')}</div>
-                </div>
-              </div>
-            ))}
+      {selected.length > 0 && (
+        <div className="card" style={{ background: 'var(--vc)', border: '1px solid #C8E6D4' }}>
+          <div className="ct">✅ {selected.length} archivo(s) listo(s)</div>
+          <div className="brow" style={{ marginTop: 0 }}>
+            <button className="btn bvd" onClick={handleUseFiles}>📥 Extraer datos de estos archivos</button>
           </div>
-
-          {selected.length > 0 && (
-            <div className="card" style={{ background: 'var(--vc)', border: '1px solid #C8E6D4' }}>
-              <div className="ct">{selected.length} archivo(s) seleccionado(s)</div>
-              <div className="brow" style={{ marginTop: 0 }}>
-                <button className="btn bvd" onClick={handleUseFiles}>📥 Usar estos archivos para el informe</button>
-                <button className="btn bgh" onClick={() => setSelected([])}>Limpiar selección</button>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>
