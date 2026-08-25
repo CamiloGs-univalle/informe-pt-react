@@ -70,7 +70,6 @@ export function clearAccessToken() {
 
 export function isConnected() { return !!getStoredToken(); }
 
-// Use gapi.client for authenticated requests
 async function gapiRequest(url) {
   const token = getStoredToken();
   if (!token) throw new Error('No token');
@@ -82,7 +81,7 @@ async function gapiRequest(url) {
   return res.result;
 }
 
-export async function getDriveUserInfo(token) {
+export async function getDriveUserInfo() {
   return gapiRequest('/drive/v3/about?fields=user');
 }
 
@@ -95,28 +94,31 @@ export async function listFolders(parentId = 'root') {
 }
 
 export async function listExcelFiles(parentId = 'root') {
-  const q = `'${parentId}' in parents and trashed=false and (
-    mimeType='application/vnd.google-apps.spreadsheet' or
-    mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or
-    mimeType='application/vnd.ms-excel' or
-    mimeType='text/csv' or
-    name contains '.xlsx' or
-    name contains '.xls' or
-    name contains '.csv' or
-    name contains 'headcount' or
-    name contains 'Headcount' or
-    name contains 'seleccion' or
-    name contains 'Selección' or
-    name contains 'rotacion' or
-    name contains 'Rotación' or
-    name contains 'SST' or
-    name contains 'nomina' or
-    name contains 'Nómina'
-  )`;
+  // Simple query: get ALL files in folder first, then filter client-side
+  const q = `'${parentId}' in parents and trashed=false`;
   const resp = await gapiRequest(
-    `/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name&pageSize=200`
+    `/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name&pageSize=500`
   );
-  return resp.files || [];
+  
+  const allFiles = resp.files || [];
+  console.log('All files in folder:', allFiles);
+  
+  // Filter for spreadsheets and Excel files
+  const spreadsheetTypes = [
+    'application/vnd.google-apps.spreadsheet',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv'
+  ];
+  
+  const excelFiles = allFiles.filter(f => {
+    const isSpreadsheet = spreadsheetTypes.includes(f.mimeType);
+    const hasExcelExt = /\.(xlsx?|csv)$/i.test(f.name);
+    return isSpreadsheet || hasExcelExt;
+  });
+  
+  console.log('Excel/Sheets found:', excelFiles);
+  return excelFiles;
 }
 
 export async function downloadFile(fileId, mimeType) {
