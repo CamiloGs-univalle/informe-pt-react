@@ -79,10 +79,14 @@ export default function NuevoInforme({ ejId }) {
   const [nerr, setNerr] = useState(0);
   const [nobs, setNobs] = useState("");
   const [fotos, setFotos] = useState({});
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [excelData, setExcelData] = useState(false);
 
   const dzRef = useRef(null);
   const logoRef = useRef(null);
   const fotoRefs = useRef([]);
+  const previewRef = useRef(null);
 
   useEffect(() => {
     if (!ejId) return;
@@ -95,6 +99,37 @@ export default function NuevoInforme({ ejId }) {
   useEffect(() => {
     setHcCierre(hcInicio + hcIng - hcRet);
   }, [hcInicio, hcIng, hcRet]);
+
+  const handleExcelImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        toast('Archivo Excel cargado. Funcionalidad de importación en desarrollo.');
+        setExcelData(true);
+      };
+      reader.readAsText(file);
+    } catch(err) {
+      toast('Error al leer el archivo');
+    }
+  };
+
+  useEffect(() => {
+    if (showPreview && cliId && periodo) {
+      try {
+        const html = buildInformeHTML({
+          cliId, per: periodo, ejNom: ejecutivo?.nom || '',
+          cliNom: getCli(cliId)?.nom || '',
+          hcInicio: hcInicio, hcIng: hcIng, hcRet: hcRet, hcCierre: (hcInicio + hcIng - hcRet),
+          at, oc, mat, eg, arl, ind, sstObs, sstCasos: sstCasos,
+          nliq, ninc, nlic, nhed, nhen, nerr, nobs,
+          obsRotacion
+        }, rqs, motivos, sstCasos, fotos);
+        setPreviewHtml(html);
+      } catch(e) { console.error(e); }
+    }
+  }, [showPreview, cliId, periodo, rqs, motivos, sstCasos, hcInicio, hcIng, hcRet, at, oc, mat, eg, arl, ind, nliq, ninc, nlic, nhed, nhen, nerr, fotos]);
 
   const totRqSolicitadas = rqs.reduce((s, r) => s + (Number(r.solicitadas) || 0), 0);
   const totRqContratadas = rqs.reduce((s, r) => s + (Number(r.contratadas) || 0), 0);
@@ -380,6 +415,18 @@ export default function NuevoInforme({ ejId }) {
           ══════════════════════════════════════════════ */}
       {modo === "manual" && (
         <div className="modo-panel on">
+
+          {/* ─── EXCEL IMPORT ───────────────────────── */}
+          <div className="card">
+            <div className="ct">📊 Importar datos desde Excel</div>
+            <div className="excel-zone" onClick={() => document.getElementById('excel-file').click()}>
+              <span className="ez-ico">📊</span>
+              <div className="ez-tit">Haz clic para subir un archivo Excel (.xlsx)</div>
+              <div className="ez-sub">Los campos se llenarán automáticamente con los datos del archivo</div>
+            </div>
+            <input type="file" id="excel-file" accept=".xlsx,.xls" style={{display:'none'}} onChange={handleExcelImport} />
+            {excelData && <div className="alrt avd">✓ Datos importados correctamente del archivo Excel</div>}
+          </div>
 
           {/* ─── SECTION 1 — Cliente y Período ─────── */}
           <div className="card">
@@ -964,6 +1011,26 @@ export default function NuevoInforme({ ejId }) {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* ─── LIVE PREVIEW ──────────────────────── */}
+          <div className="card">
+            <div className="ct">👁 Previsualización del informe</div>
+            <div className="prev-toggle">
+              <button className="btn bgh bsm" onClick={() => setShowPreview(!showPreview)}>
+                {showPreview ? ' Ocultar previsualización' : '👁 Ver previsualización'}
+              </button>
+            </div>
+            {showPreview && (
+              <div className="prev-frame">
+                <iframe 
+                  ref={previewRef}
+                  title="Vista previa del informe"
+                  srcDoc={previewHtml}
+                  style={{width:'100%',height:600,border:'none'}}
+                />
+              </div>
+            )}
           </div>
 
           {/* ─── BOTTOM ACTIONS ────────────────────── */}

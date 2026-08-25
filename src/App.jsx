@@ -1,7 +1,7 @@
 import "./style.css";
 import { HashRouter, Routes, Route } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { loadDB } from "./store";
+import { loadDB, getEjs } from "./store";
 import { ToastProvider } from "./components/Toast";
 import Login from "./components/Login";
 import Layout from "./components/Layout";
@@ -15,8 +15,9 @@ import DriveExplorer from "./components/DriveExplorer";
 
 export default function App() {
   const [ejId, setEjId] = useState(() => localStorage.getItem('ps_ej_activo') || null);
+  const [ejs, setEjs] = useState([]);
 
-  useEffect(() => { loadDB(); }, []);
+  useEffect(() => { loadDB(); setEjs(getEjs()); }, []);
 
   const handleLogin = (id) => {
     setEjId(id);
@@ -26,6 +27,11 @@ export default function App() {
   const handleLogout = () => {
     setEjId(null);
     localStorage.removeItem('ps_ej_activo');
+  };
+
+  const handleEjChange = (id) => {
+    setEjId(id);
+    localStorage.setItem('ps_ej_activo', id);
   };
 
   if (!ejId) {
@@ -40,7 +46,7 @@ export default function App() {
     <ToastProvider>
       <HashRouter>
         <Routes>
-          <Route element={<Layout ejId={ejId} onLogout={handleLogout} />}>
+          <Route element={<Layout ejId={ejId} onLogout={handleLogout} ejs={ejs} onEjChange={handleEjChange} />}>
             <Route path="/" element={<Dashboard ejId={ejId} />} />
             <Route path="/clientes" element={<Clientes ejId={ejId} />} />
             <Route path="/nuevo" element={<NuevoInforme ejId={ejId} />} />
