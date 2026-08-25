@@ -31,8 +31,8 @@ export default function DriveExplorer({ onFilesSelected }) {
     try {
       setLoading(true);
       await loadGoogleScripts();
-      const userInfo = await getDriveUserInfo(token);
-      setUser(userInfo);
+      const about = await getDriveUserInfo(token);
+      setUser(about.user || about);
       await loadFolderContent(token, 'root');
       setLoading(false);
     } catch (e) {
@@ -202,7 +202,7 @@ export default function DriveExplorer({ onFilesSelected }) {
             {user?.photoLink && <img src={user.photoLink} alt="" style={{ width: 32, height: 32, borderRadius: '50%' }} />}
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--vdo)' }}>✅ Conectado a Google Drive</div>
-              <div style={{ fontSize: 11, color: 'var(--grt)' }}>{user?.displayName} · {user?.user}</div>
+              <div style={{ fontSize: 11, color: 'var(--grt)' }}>{user?.displayName} · {user?.emailAddress}</div>
             </div>
           </div>
           <button className="btn bro bsm" onClick={handleDisconnect}>Desconectar</button>
