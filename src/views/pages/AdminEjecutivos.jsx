@@ -28,15 +28,12 @@ export default function AdminEjecutivos({ user }) {
   const isAdmin = user?.role === 'admin';
 
   const refresh = () => {
-    const all = getEjs();
-    // Admin solo ve su área, Super ve todo
-    const visible = isSuper ? all : isAdmin ? getUsersForAdmin(user.id) : all.filter(u=> u.id===user.id);
-    // Pero para el admin que es jefe, getUsersForAdmin ya filtra por área y oculta super_admin
-    // Para usuario normal que entra por error, mostrar solo él
-    const finalList = isSuper ? all : visible.length? visible : all.filter(u=> u.id===user.id);
-    // Si es admin y no es super, ocultar super_admin (ya lo hace getUsersForAdmin)
+    const all = [...getEjs()];
+    // Admin solo ve su área, Super ve todo — forzamos nuevo array para re-render
+    const visible = isSuper ? all : isAdmin ? [...getUsersForAdmin(user.id)] : all.filter(u=> u.id===user.id);
+    const finalList = isSuper ? [...all] : visible.length? [...visible] : all.filter(u=> u.id===user.id);
     setList(finalList);
-    setAreas(getAreas());
+    setAreas([...getAreas()]);
   };
   useEffect(() => { refresh(); }, [user]);
 
@@ -95,8 +92,14 @@ export default function AdminEjecutivos({ user }) {
 
   const filtered = useMemo(()=> {
     let l = enriched.filter(({e})=> !search || e.nom.toLowerCase().includes(search.toLowerCase()) || (e.email||'').toLowerCase().includes(search.toLowerCase()) || (e.zona||'').toLowerCase().includes(search.toLowerCase()));
-    if (filtroArea!=='todos') l = l.filter(({e})=> e.areaId===filtroArea);
-    if (filtroRol!=='todos') l = l.filter(({e})=> e.role===filtroRol);
+    if (filtroArea!=='todos') {
+      const areaNorm = String(filtroArea).toLowerCase();
+      l = l.filter(({e})=> String(e.areaId||'').toLowerCase()===areaNorm);
+    }
+    if (filtroRol!=='todos') {
+      const rolNorm = String(filtroRol).toLowerCase().replace(/\s+/g,'_');
+      l = l.filter(({e})=> String(e.role||'').toLowerCase()===rolNorm);
+    }
     return l;
   }, [enriched, search, filtroArea, filtroRol]);
 
