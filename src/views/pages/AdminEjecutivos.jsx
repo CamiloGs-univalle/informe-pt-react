@@ -91,7 +91,14 @@ export default function AdminEjecutivos({ user }) {
   }), [list, areas]);
 
   const filtered = useMemo(()=> {
-    let l = enriched.filter(({e})=> !search || e.nom.toLowerCase().includes(search.toLowerCase()) || (e.email||'').toLowerCase().includes(search.toLowerCase()) || (e.zona||'').toLowerCase().includes(search.toLowerCase()));
+    // Deduplicate by e.id first (defensive against any duplicates in source)
+    const seen = new Set();
+    const unique = enriched.filter(({e}) => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
+    let l = unique.filter(({e})=> !search || e.nom.toLowerCase().includes(search.toLowerCase()) || (e.email||'').toLowerCase().includes(search.toLowerCase()) || (e.zona||'').toLowerCase().includes(search.toLowerCase()));
     if (filtroArea!=='todos') {
       const areaNorm = String(filtroArea).toLowerCase();
       l = l.filter(({e})=> String(e.areaId||'').toLowerCase()===areaNorm);
