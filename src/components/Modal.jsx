@@ -1,16 +1,6 @@
-export default function Modal({ open, onClose, title, children, wide }) {
-  if (!open) return null;
-  return (
-    <div className="mover on" onClick={onClose}>
-      <div
-        className="mdl"
-        style={wide ? { maxWidth: "700px" } : undefined}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button className="mclose" onClick={onClose}>✕</button>
-        {title && <h3 className="ct">{title}</h3>}
-        {children}
-      </div>
-    </div>
-  );
-}
+/**
+ * MOVED to src/views/common/Modal.jsx — see docs/ARCHITECTURE.md and
+ * CHANGELOG.md. Kept as a re-export for backwards compatibility; safe to
+ * delete once confirmed unused elsewhere.
+ */
+export { default } from '../views/common/Modal.jsx';

@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup — Mi equipo, estilo oficina</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --vd:#168A43; --vdo:#0F6B33; --vc:#E8F5EE;
+    --am:#E8BB26; --amc:#FDF6D8;
+    --osc:#12212D; --gr:#F2F4F2; --grb:#DDE4DD; --grt:#5A6A5A; --tx:#12212D;
+    --a-sel:#E8BB26; --a-sst:#1A5276; --a-eje:#12212D; --a-bie:#7A6010;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Manrope',Segoe UI,Arial,sans-serif;background:#EDEFEA;color:var(--tx);font-size:14px;padding-bottom:60px}
+  .wrap{max-width:1180px;margin:0 auto;padding:18px 18px 40px}
+
+  /* ---------- disclaimer + toggle ---------- */
+  .notice{background:var(--osc);color:#fff;font-size:12.5px;text-align:center;padding:9px 14px;display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap}
+  .notice strong{color:var(--am)}
+  .switcher{display:flex;justify-content:center;gap:8px;margin:20px 0 26px}
+  .sw-btn{border:1.5px solid var(--grb);background:#fff;color:var(--grt);font-weight:800;font-size:12.5px;padding:9px 18px;border-radius:999px;cursor:pointer;display:flex;align-items:center;gap:7px;transition:all .15s}
+  .sw-btn:hover{border-color:var(--vd);color:var(--vd)}
+  .sw-btn.on{background:var(--vd);border-color:var(--vd);color:#fff;box-shadow:0 4px 12px rgba(22,138,67,.28)}
+
+  .pagehead{text-align:center;margin-bottom:4px}
+  .pagehead h1{font-size:21px;margin:0 0 4px;font-weight:800}
+  .pagehead p{margin:0;color:var(--grt);font-size:12.5px}
+
+  .view{display:none}
+  .view.on{display:block}
+
+  /* =========================================================
+     VISTA OFICINA — plano de piso visto desde arriba
+     ========================================================= */
+  .floor{
+    position:relative;background:
+      linear-gradient(135deg, rgba(255,255,255,.6), rgba(255,255,255,0) 40%),
+      repeating-linear-gradient(0deg, #E4E9E1 0 2px, #EAEEE7 2px 42px),
+      repeating-linear-gradient(90deg, #E4E9E1 0 2px, #EAEEE7 2px 42px);
+    border-radius:22px;border:1px solid #DDE4DD;padding:20px;
+    box-shadow:0 10px 34px rgba(18,33,45,.10), inset 0 0 0 1px #fff;
+  }
+  .windows{display:flex;gap:8px;justify-content:center;margin-bottom:14px}
+  .windows span{width:54px;height:14px;border-radius:4px;background:linear-gradient(180deg,#BFE3F5,#EAF6FC);border:1px solid #AFD6EC}
+
+  .reception{
+    background:linear-gradient(120deg, var(--vd), var(--vdo));
+    color:#fff;border-radius:16px;padding:16px 20px;margin-bottom:14px;
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    box-shadow:0 8px 22px rgba(15,107,51,.28);
+  }
+  .reception .rlogo{width:46px;height:46px;border-radius:12px;background:#fff;color:var(--vd);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:16px;flex-shrink:0}
+  .reception .rtxt{flex:1;min-width:180px}
+  .reception .rtxt b{font-size:15px}
+  .reception .rtxt div{font-size:11.5px;opacity:.85;margin-top:2px}
+  .reception .rkpis{display:flex;gap:10px;flex-wrap:wrap}
+  .reception .rk{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);border-radius:10px;padding:7px 12px;text-align:center;min-width:72px}
+  .reception .rk b{display:block;font-size:16px}
+  .reception .rk span{font-size:9.5px;opacity:.85;text-transform:uppercase;letter-spacing:.04em}
+  .reception .superadmin{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.14);border-radius:10px;padding:6px 10px;font-size:11px}
+  .reception .superadmin .av{width:26px;height:26px;border-radius:7px;background:var(--am);color:var(--osc);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:11px}
+
+  .rooms{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.rooms{grid-template-columns:1fr}}
+
+  .room{border-radius:16px;overflow:hidden;background:#fff;box-shadow:0 6px 16px rgba(18,33,45,.08);border:1px solid #E3E8E2}
+  .room-wall{padding:10px 14px;display:flex;align-items:center;gap:10px;color:#fff}
+  .room-wall .icon{width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+  .room-wall .name{font-weight:800;font-size:12.5px}
+  .room-wall .sub{font-size:10px;opacity:.85}
+  .room-wall .pct{margin-left:auto;font-weight:900;font-size:15px;text-align:right}
+  .room-floor{
+    padding:14px;display:flex;flex-wrap:wrap;gap:12px;
+    background:
+      radial-gradient(circle at 92% 90%, rgba(22,138,67,.06), transparent 40%),
+      repeating-linear-gradient(45deg, #FAFBF9 0 10px, #F3F6F2 10px 20px);
+    position:relative;min-height:120px;
+  }
+  .plant{position:absolute;font-size:20px;opacity:.55}
+  .plant.p1{bottom:8px;left:10px} .plant.p2{top:8px;right:12px}
+
+  .desk{
+    width:118px;background:#fff;border:1px solid var(--grb);border-radius:12px;
+    padding:10px 8px 8px;text-align:center;position:relative;
+    box-shadow:0 3px 0 rgba(18,33,45,.06), 0 4px 10px rgba(18,33,45,.05);
+  }
+  .desk::before{ /* mesa/escritorio */
+    content:'';position:absolute;left:8px;right:8px;bottom:-6px;height:10px;
+    background:linear-gradient(180deg,#D9C9A6,#C7B58C);border-radius:0 0 6px 6px;box-shadow:0 3px 5px rgba(0,0,0,.12);
+  }
+  .desk .av{width:34px;height:34px;border-radius:9px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px;position:relative;box-shadow:0 3px 8px rgba(0,0,0,.18)}
+  .desk .dot{position:absolute;bottom:-2px;right:-2px;width:9px;height:9px;border-radius:50%;background:#B9C2B9;border:2px solid #fff}
+  .desk .dot.on{background:var(--vd);animation:pulseGreen 2s ease-out infinite}
+  @keyframes pulseGreen{0%{box-shadow:0 0 0 0 rgba(22,138,67,.5)}70%{box-shadow:0 0 0 6px rgba(22,138,67,0)}100%{box-shadow:0 0 0 0 rgba(22,138,67,0)}}
+  .desk .nm{font-size:10.8px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .desk .rl{font-size:8.5px;color:var(--grt);text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px}
+  .desk .ring{width:32px;height:32px;margin:2px auto}
+  .desk .stat{font-size:9px;color:var(--grt);margin-top:2px}
+  .desk .pend{display:inline-block;margin-top:4px;font-size:8.5px;font-weight:800;padding:1.5px 7px;border-radius:20px}
+  .pend.ok{background:#D4EDDA;color:#14501E}
+  .pend.wn{background:var(--amc);color:#7A6010}
+
+  .meet{
+    grid-column:1/-1;background:linear-gradient(120deg,#EAF2FF,#F7FBFF);border:1px dashed #AFC7E6;border-radius:16px;
+    padding:16px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:14px;
+  }
+  .meet .table{width:70px;height:44px;border-radius:10px;background:linear-gradient(135deg,#1A5276,#2E7CB8);flex-shrink:0;position:relative;box-shadow:0 6px 14px rgba(26,82,118,.3)}
+  .meet .table::before,.meet .table::after{content:'';position:absolute;width:12px;height:8px;background:#C0392B;border-radius:3px;top:-11px}
+  .meet .table::before{left:8px}.meet .table::after{right:8px}
+  .meet .txt b{font-size:13px;display:block}
+  .meet .txt span{font-size:11.5px;color:var(--grt)}
+
+  /* =========================================================
+     VISTA TARJETAS — lo que ya está implementado en la app real
+     ========================================================= */
+  .card-pod{background:#fff;border-radius:14px;border:1px solid var(--grb);margin-bottom:14px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.05)}
+  .card-pod-head{display:flex;align-items:center;gap:12px;padding:14px 18px}
+  .card-pod-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;flex-shrink:0;box-shadow:0 2px 6px rgba(0,0,0,.15)}
+  .card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;padding:0 14px 14px}
+  .member-card{background:var(--gr);border:1px solid var(--grb);border-radius:12px;padding:12px}
+  .member-card .top{display:flex;gap:9px;align-items:flex-start}
+  .member-card .av{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px;flex-shrink:0}
+  .member-card .nm{font-weight:800;font-size:12.5px}
+  .member-card .rl{font-size:9.5px;color:var(--grt)}
+  .member-card .bar{height:6px;background:#E6EBE6;border-radius:20px;margin-top:8px;overflow:hidden}
+  .member-card .bar i{display:block;height:100%;border-radius:20px}
+  .member-card .foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:10px;color:var(--grt)}
+
+  .verdict{background:#fff;border-radius:14px;padding:18px 20px;margin-top:24px;border:1px solid var(--grb)}
+  .verdict h3{margin:0 0 8px;font-size:13px}
+  .verdict p{margin:0 0 6px;font-size:12.5px;color:var(--grt);line-height:1.6}
+
+  /* =========================================================
+     VISTA PIXEL — bloques CSS (no imágenes), estilo retro 8-bit
+     ========================================================= */
+  .pixel-wrap{font-family:'Press Start 2P',monospace}
+  .pixel-scene{background:repeating-conic-gradient(#DCD3B0 0% 25%,#CBC094 0% 50%) 0 0/28px 28px;border:5px solid #12212D;padding:0;position:relative;overflow:hidden;box-shadow:0 10px 28px rgba(18,33,45,.18)}
+  .pixel-wall{height:52px;background:#2E4B63;border-bottom:5px solid #12212D;position:relative;display:flex;align-items:center;gap:16px;padding:0 18px}
+  .pixel-wall .win{width:26px;height:22px;background:#BFE3F5;border:3px solid #12212D;position:relative;flex-shrink:0}
+  .pixel-wall .win::before{content:'';position:absolute;left:50%;top:0;bottom:0;width:3px;background:#12212D;transform:translateX(-50%)}
+  .pixel-wall .win::after{content:'';position:absolute;top:50%;left:0;right:0;height:3px;background:#12212D;transform:translateY(-50%)}
+  .pixel-wall .sign{margin-left:auto;background:#E8BB26;color:#12212D;border:3px solid #12212D;padding:6px 10px;font-size:8px;line-height:1.6}
+  .pixel-floor{padding:26px 22px 56px;display:flex;gap:28px;flex-wrap:wrap;align-items:flex-end;position:relative}
+  .desk-unit{position:relative;width:104px;height:134px;flex-shrink:0}
+  .plant-unit{position:relative;width:44px;height:64px;flex-shrink:0;align-self:flex-end;margin-bottom:6px}
+  .blk{position:absolute;box-sizing:border-box}
+  .blk.shadow{background:rgba(18,33,45,.18);border-radius:50%}
+  .blk.chair{background:#4a3221;border:2px solid #2c1d12}
+  .blk.torso{border:2px solid rgba(0,0,0,.28)}
+  .blk.head{background:#E8C39E;border:2px solid #12212D}
+  .blk.hair{background:#12212D}
+  .blk.desktop{background:#C7A46B;border:2px solid #8a6a3f}
+  .blk.deskfront{background:#B08F57;border-top:2px solid #8a6a3f}
+  .blk.legL,.blk.legR{background:#7a5c34}
+  .blk.monbody{background:#12212D;border:2px solid #000}
+  .blk.monstand{background:#12212D}
+  .blk.keyboard{background:#E8ECE6;border:1px solid #9aa6a0}
+  .blk.pshadow{background:rgba(18,33,45,.15);border-radius:50%}
+  .blk.pot{background:#8a6a3f;border:2px solid #5c4526}
+  .blk.potrim{background:#a9825a;border:2px solid #5c4526}
+  .blk.leaf1{background:#2f8f4e;border-radius:50% 50% 0 50%}
+  .blk.leaf2{background:#3aa85c;border-radius:50% 50% 50% 0}
+  .blk.leaf3{background:#59c47c;border-radius:50%}
+  .desk-label{position:absolute;left:0;right:0;bottom:-40px;text-align:center}
+  .desk-label .nm{font-size:7.5px;color:#12212D;line-height:1.6}
+  .desk-label .rl{font-size:6px;color:#5A6A5A;margin-top:2px}
+  .hpbar{display:flex;gap:2px;justify-content:center;margin-top:5px}
+  .hpbar i{width:6px;height:9px;background:#DDE4DD;border:1px solid #9aa6a0;display:block}
+  .hpbar i.on{background:#168A43;border-color:#0F6B33}
+  .meet-pixel{margin:4px 22px 26px;background:#EAF2FF;border:3px solid #12212D;padding:12px 14px;display:flex;align-items:center;gap:12px}
+  .meet-pixel .tb{width:52px;height:32px;background:#1A5276;border:3px solid #12212D;flex-shrink:0}
+  .meet-pixel span{font-size:7.5px;line-height:1.9;color:#12212D}
+
+  /* --- piso completo estilo oficina de referencia: mesa de juntas con
+     sillas, 4 salas por área, mostrador de recepción con "persona" --- */
+  .pixel-scene{padding-bottom:20px}
+  .pixel-body{padding:22px 20px 6px}
+  .pixel-meet-row{display:flex;align-items:center;justify-content:center;gap:18px;margin-bottom:28px;flex-wrap:wrap}
+  .meet-label{font-size:8px;line-height:2;color:#12212D}
+  .table-unit{position:relative;width:180px;height:140px;flex-shrink:0}
+  .blk.tshadow{background:rgba(18,33,45,.15);border-radius:50%}
+  .blk.ttop{background:#1A5276;border:3px solid #12212D}
+  .blk.chair2{background:#7a3b3b;border:2px solid #4a2323}
+  .pixel-rooms{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:22px}
+  @media(max-width:760px){.pixel-rooms{grid-template-columns:1fr}}
+  .pixel-room{border:3px solid var(--rc,#12212D);background:rgba(255,255,255,.55)}
+  .pixel-room-head{background:var(--rc,#12212D);color:#fff;font-size:7.5px;padding:9px 10px;display:flex;justify-content:space-between;align-items:center;line-height:1.6}
+  .pixel-room-head b{color:#E8BB26}
+  .pixel-room-floor{display:flex;flex-wrap:wrap;gap:22px;padding:24px 14px 56px;align-items:flex-end;position:relative;min-height:110px}
+  .frame-unit{position:relative;width:40px;height:30px;flex-shrink:0}
+  .blk.frameOuter{background:#5c4526;border:2px solid #3a2c18}
+  .blk.frameSky{background:#BFE3F5}
+  .blk.frameGround{background:#7fb069}
+  .pixel-reception{display:flex;justify-content:center;align-items:flex-end;gap:22px;padding:6px 20px 26px;flex-wrap:wrap}
+  .counter-unit{position:relative;width:200px;height:110px;flex-shrink:0;margin-top:18px}
+  .blk.counterShadow{background:rgba(18,33,45,.15);border-radius:50%}
+  .blk.counterTop{background:#C7A46B;border:2px solid #8a6a3f}
+  .blk.counterFront{background:#B08F57;border-top:2px solid #8a6a3f}
+  .blk.crown{background:#E8BB26;border:2px solid #7A6010;transform:rotate(45deg)}
+  .counter-label{position:absolute;left:0;right:0;bottom:-22px;text-align:center;font-size:7px;color:#12212D;line-height:1.8}
+</style>
+</head>
+<body>
+
+  <div class="notice">👀 Esto es un <strong>mockup estático</strong> para decidir el diseño — nada aquí está conectado a datos reales todavía.</div>
+
+  <div class="wrap">
+    <div class="pagehead" style="margin-top:20px">
+      <h1>🏢 Mi equipo — explorando el estilo "oficina"</h1>
+      <p>Los nombres y números son los mismos que ya viste en tus capturas — solo cambia la forma de presentarlos.</p>
+    </div>
+
+    <div class="switcher">
+      <button class="sw-btn on" data-view="office" onclick="showView('office')">🏢 Vista oficina (plano de piso)</button>
+      <button class="sw-btn" data-view="cards" onclick="showView('cards')">🗂️ Vista tarjetas (la que ya implementamos)</button>
+      <button class="sw-btn" data-view="pixel" onclick="showView('pixel')">🎮 Vista pixel (retro, prueba de concepto)</button>
+    </div>
+
+    <!-- ================= VISTA OFICINA ================= -->
+    <div class="view on" id="view-office">
+      <div class="floor">
+        <div class="windows"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+        <div class="reception">
+          <div class="rlogo">PS</div>
+          <div class="rtxt"><b>Recepción — Proservis Temporales</b><div>Bienvenido a tu piso de equipo. Cada sala es un área.</div></div>
+          <div class="rkpis">
+            <div class="rk"><b>8</b><span>Personas</span></div>
+            <div class="rk"><b>44%</b><span>Avance</span></div>
+            <div class="rk"><b>3</b><span>Sin asignar</span></div>
+          </div>
+          <div class="superadmin"><span class="av">CA</span> Camilo García · Super Admin</div>
+        </div>
+
+        <div class="rooms">
+          <!-- Selección y Contratación -->
+          <div class="room">
+            <div class="room-wall" style="background:linear-gradient(120deg,#E8BB26,#D4A015);color:#12212D">
+              <div class="icon">🧩</div>
+              <div><div class="name">Selección y Contratación</div><div class="sub" style="color:#5b4a0d">3 personas</div></div>
+              <div class="pct">45%</div>
+            </div>
+            <div class="room-floor">
+              <span class="plant p1">🪴</span><span class="plant p2">🌿</span>
+              <div class="desk">
+                <div class="av" style="background:#168A43">AM<span class="dot on"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Andrea Martínez</div>
+                <div class="stat">5/14 informes</div>
+                <span class="pend wn">9 pendientes</span>
+              </div>
+              <div class="desk">
+                <div class="av" style="background:#168A43">AP<span class="dot"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Angie Paola Niño</div>
+                <div class="stat">Sin clientes aún</div>
+                <span class="pend wn">0/0</span>
+              </div>
+              <div class="desk">
+                <div class="av" style="background:#168A43">CM<span class="dot on"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Claudia Medina</div>
+                <div class="stat">2/1 informes</div>
+                <span class="pend ok">200% · al día</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- SST -->
+          <div class="room">
+            <div class="room-wall" style="background:linear-gradient(120deg,#1A5276,#123A54)">
+              <div class="icon">🦺</div>
+              <div><div class="name">SST</div><div class="sub">2 personas</div></div>
+              <div class="pct">60%</div>
+            </div>
+            <div class="room-floor">
+              <span class="plant p1">🪴</span>
+              <div class="desk">
+                <div class="av" style="background:#168A43">CS<span class="dot on"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Claudia Sanchez</div>
+                <div class="stat">7/10 informes</div>
+                <span class="pend wn">3 pendientes</span>
+              </div>
+              <div class="desk">
+                <div class="av" style="background:#168A43">DF<span class="dot"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Diana Flor</div>
+                <div class="stat">1/2 informes</div>
+                <span class="pend wn">1 pendiente</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="meet">
+          <div class="table"></div>
+          <div class="txt"><b>🤝 Sala de juntas — Tablero colaborativo</b><span>Aquí es donde las áreas se cruzan y el líder valida el trabajo de todos — ya existe como su propia página.</span></div>
+        </div>
+
+        <div class="rooms" style="margin-top:14px">
+          <!-- Atención al Cliente -->
+          <div class="room">
+            <div class="room-wall" style="background:linear-gradient(120deg,#12212D,#0B151C)">
+              <div class="icon">🤝</div>
+              <div><div class="name">Atención al Cliente</div><div class="sub" style="color:#c9d3d0">2 personas</div></div>
+              <div class="pct">0%</div>
+            </div>
+            <div class="room-floor">
+              <span class="plant p2">🌿</span>
+              <div class="desk">
+                <div class="av" style="background:#168A43">EL<span class="dot"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Evelyn Lopez</div>
+                <div class="stat">0/12 informes</div>
+                <span class="pend wn">12 pendientes</span>
+              </div>
+              <div class="desk">
+                <div class="av" style="background:#168A43">FC<span class="dot"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Francisco Castro</div>
+                <div class="stat">0/4 informes</div>
+                <span class="pend wn">4 pendientes</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bienestar -->
+          <div class="room">
+            <div class="room-wall" style="background:linear-gradient(120deg,#7A6010,#5c480c)">
+              <div class="icon">🌱</div>
+              <div><div class="name">Bienestar y Clima</div><div class="sub">1 persona</div></div>
+              <div class="pct">0%</div>
+            </div>
+            <div class="room-floor">
+              <span class="plant p1">🪴</span>
+              <div class="desk">
+                <div class="av" style="background:#168A43">GT<span class="dot"></span></div>
+                <div class="rl">Usuario</div>
+                <div class="nm">Ginna Toro</div>
+                <div class="stat">0/3 informes</div>
+                <span class="pend wn">3 pendientes</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= VISTA TARJETAS ================= -->
+    <div class="view" id="view-cards">
+      <div class="card-pod">
+        <div class="card-pod-head" style="background:linear-gradient(90deg,#E8BB261F,transparent 85%);border-left:4px solid #E8BB26">
+          <div class="card-pod-icon" style="background:#E8BB26">🧩</div>
+          <div><div style="font-weight:800;font-size:13px">Selección y Contratación</div><div style="font-size:10.5px;color:var(--grt)">3 personas</div></div>
+          <div style="margin-left:auto;text-align:right"><div style="font-size:17px;font-weight:900;color:#E8BB26">45%</div><div style="font-size:9px;color:var(--grt)">avance prom.</div></div>
+        </div>
+        <div class="card-grid">
+          <div class="member-card">
+            <div class="top"><div class="av" style="background:#168A43">AM</div><div><div class="nm">Andrea Martínez</div><div class="rl">Usuario</div></div></div>
+            <div class="bar"><i style="width:36%;background:#C0392B"></i></div>
+            <div class="foot"><span>5/14 informes</span><span class="pend wn" style="padding:1.5px 7px;border-radius:20px">9 pend.</span></div>
+          </div>
+          <div class="member-card">
+            <div class="top"><div class="av" style="background:#168A43">AP</div><div><div class="nm">Angie Paola Niño</div><div class="rl">Usuario</div></div></div>
+            <div style="font-size:11px;color:var(--grt);margin-top:8px">Sin clientes asignados todavía.</div>
+          </div>
+          <div class="member-card">
+            <div class="top"><div class="av" style="background:#168A43">CM</div><div><div class="nm">Claudia Medina</div><div class="rl">Usuario</div></div></div>
+            <div class="bar"><i style="width:100%;background:#168A43"></i></div>
+            <div class="foot"><span>2/1 informes</span><span class="pend ok" style="padding:1.5px 7px;border-radius:20px">200% · al día</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card-pod">
+        <div class="card-pod-head" style="background:linear-gradient(90deg,#1A52761F,transparent 85%);border-left:4px solid #1A5276">
+          <div class="card-pod-icon" style="background:#1A5276">🦺</div>
+          <div><div style="font-weight:800;font-size:13px">SST</div><div style="font-size:10.5px;color:var(--grt)">2 personas</div></div>
+          <div style="margin-left:auto;text-align:right"><div style="font-size:17px;font-weight:900;color:#1A5276">60%</div><div style="font-size:9px;color:var(--grt)">avance prom.</div></div>
+        </div>
+        <div class="card-grid">
+          <div class="member-card">
+            <div class="top"><div class="av" style="background:#168A43">CS</div><div><div class="nm">Claudia Sanchez</div><div class="rl">Usuario</div></div></div>
+            <div class="bar"><i style="width:70%;background:#E8BB26"></i></div>
+            <div class="foot"><span>7/10 informes</span><span class="pend wn" style="padding:1.5px 7px;border-radius:20px">3 pend.</span></div>
+          </div>
+          <div class="member-card">
+            <div class="top"><div class="av" style="background:#168A43">DF</div><div><div class="nm">Diana Flor</div><div class="rl">Usuario</div></div></div>
+            <div class="bar"><i style="width:50%;background:#C0392B"></i></div>
+            <div class="foot"><span>1/2 informes</span><span class="pend wn" style="padding:1.5px 7px;border-radius:20px">1 pend.</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= VISTA PIXEL (retro) ================= -->
+    <div class="view" id="view-pixel">
+      <div class="pixel-wrap">
+        <div class="pixel-scene">
+          <div class="pixel-wall">
+            <span class="win"></span><span class="win"></span><span class="win"></span>
+            <div class="frame-unit" id="frame-slot"></div>
+            <span class="sign">PROSERVIS<br>TEMPORALES</span>
+          </div>
+
+          <div class="pixel-body">
+            <div class="pixel-meet-row">
+              <div class="table-unit" id="table-slot"></div>
+              <div class="meet-label">🤝 SALA DE JUNTAS<br>Tablero colaborativo —<br>donde las áreas se cruzan</div>
+            </div>
+
+            <div class="pixel-rooms">
+              <div class="pixel-room" style="--rc:#E8BB26">
+                <div class="pixel-room-head">🧩 SELECCIÓN Y CONTRATACIÓN <b>45%</b></div>
+                <div class="pixel-room-floor" id="room-a1"></div>
+              </div>
+              <div class="pixel-room" style="--rc:#1A5276">
+                <div class="pixel-room-head">🦺 SST <b>60%</b></div>
+                <div class="pixel-room-floor" id="room-a2"></div>
+              </div>
+              <div class="pixel-room" style="--rc:#12212D">
+                <div class="pixel-room-head">🤝 ATENCIÓN AL CLIENTE <b>0%</b></div>
+                <div class="pixel-room-floor" id="room-a3"></div>
+              </div>
+              <div class="pixel-room" style="--rc:#7A6010">
+                <div class="pixel-room-head">🌱 BIENESTAR Y CLIMA <b>0%</b></div>
+                <div class="pixel-room-floor" id="room-a4"></div>
+              </div>
+            </div>
+
+            <div class="pixel-reception" id="pixel-reception"></div>
+          </div>
+        </div>
+        <p style="font-size:11px;color:var(--grt);margin-top:14px;line-height:1.7">
+          Las 8 personas de tu equipo real, las 4 áreas, la mesa de juntas del Tablero
+          colaborativo y la recepción con Camilo (Super Admin) — todo armado con los mismos
+          bloques CSS reutilizables (escritorio, silla, planta, mesa, mostrador), sin imágenes.
+        </p>
+      </div>
+    </div>
+
+    <div class="verdict">
+      <h3>🤔 Mi opinión, honesta</h3>
+      <p><strong>Sí se puede</strong> — y la llevé más lejos: la vista "pixel" de arriba ahora tiene las 8 personas reales de tu equipo, las 4 salas por área, la mesa de juntas del Tablero colaborativo (con sus 6 sillas) y hasta la recepción con Camilo. Todo con rectángulos CSS (sin imágenes, sin librerías): escritorio, silla, monitor con pantalla que se enciende en verde si la persona trabajó esta semana, y una "barra de vida" en bloques en vez del anillo de avance. Es 100% real, no una foto — recárgala y mira cómo se arma sola con los datos de ejemplo.</p>
+      <p>Lo que tengo que ser honesto es con el nivel de detalle: tu imagen de referencia es una ilustración generada por IA (se nota en el sombreado suave y los detalles finos) — eso no lo puedo replicar a mano con CSS, y no tengo una herramienta de generación de imágenes en esta sesión para crear una parecida. Lo que sí logro, y es lo que ves arriba, es un estilo <strong>retro/8-bit propio</strong> (bloques, colores planos, fuente pixelada) que se siente "videojuego" pero no es tan detallado como tu foto.</p>
+      <p>El costo real de este camino: cada mueble/pose nuevo (otra silla, otra planta, alguien de pie) hay que armarlo a mano igual que este escritorio — no sale automático de los datos como en las otras dos vistas. Lo manejable es tener 3-4 "muebles" reutilizables (este escritorio, esta planta) y repetirlos por persona, recoloreados por rol — no una escena única por cada quien.</p>
+      <p>Las tres opciones ya corren con tus mismos datos y colores. Dime con cuál seguimos — o si prefieres combinar (ej. pixel para la bienvenida/recepción, tarjetas para la lista completa) — y lo paso al código real.</p>
+    </div>
+  </div>
+
+<script>
+function showView(v){
+  document.querySelectorAll('.view').forEach(el => el.classList.remove('on'));
+  document.getElementById('view-' + v).classList.add('on');
+  document.querySelectorAll('.sw-btn').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+}
+
+// --- "muebles" del cuarto pixel: cada uno es una lista de rectángulos
+// (clase + posición + tamaño), reutilizada y recoloreada por persona en vez
+// de dibujar una escena distinta para cada quien. ---
+const DESK_BLOCKS = [
+  { cls: 'shadow', x: 24, y: 118, w: 72, h: 12 },
+  { cls: 'chair', x: 44, y: 58, w: 28, h: 36 },
+  { cls: 'torso', x: 40, y: 64, w: 32, h: 28 },
+  { cls: 'head', x: 48, y: 48, w: 20, h: 18 },
+  { cls: 'hair', x: 48, y: 44, w: 20, h: 8 },
+  { cls: 'desktop', x: 8, y: 76, w: 88, h: 10 },
+  { cls: 'deskfront', x: 8, y: 86, w: 88, h: 26 },
+  { cls: 'legL', x: 12, y: 112, w: 6, h: 14 },
+  { cls: 'legR', x: 82, y: 112, w: 6, h: 14 },
+  { cls: 'monbody', x: 16, y: 54, w: 30, h: 22 },
+  { cls: 'monscreen', x: 19, y: 57, w: 24, h: 16 },
+  { cls: 'monstand', x: 25, y: 76, w: 8, h: 6 },
+  { cls: 'keyboard', x: 44, y: 78, w: 26, h: 6 },
+];
+const PLANT_BLOCKS = [
+  { cls: 'pshadow', x: 10, y: 54, w: 28, h: 8 },
+  { cls: 'pot', x: 14, y: 38, w: 20, h: 18 },
+  { cls: 'potrim', x: 12, y: 36, w: 24, h: 6 },
+  { cls: 'leaf1', x: 8, y: 14, w: 14, h: 20 },
+  { cls: 'leaf2', x: 22, y: 10, w: 14, h: 22 },
+  { cls: 'leaf3', x: 16, y: 6, w: 12, h: 16 },
+];
+
+function buildUnit(className, blocks, extra) {
+  const unit = document.createElement('div');
+  unit.className = className;
+  blocks.forEach(b => {
+    const el = document.createElement('div');
+    el.className = 'blk ' + b.cls;
+    el.style.left = b.x + 'px'; el.style.top = b.y + 'px';
+    el.style.width = b.w + 'px'; el.style.height = b.h + 'px';
+    if (b.cls === 'torso' && extra?.roleColor) el.style.background = extra.roleColor;
+    if (b.cls === 'monscreen') el.style.background = extra?.active ? '#6FE3A0' : '#3a4a52';
+    unit.appendChild(el);
+  });
+  return unit;
+}
+
+const TABLE_BLOCKS = [
+  { cls: 'tshadow', x: 34, y: 90, w: 112, h: 16 },
+  { cls: 'ttop', x: 38, y: 36, w: 104, h: 58 },
+  { cls: 'chair2', x: 56, y: 14, w: 24, h: 20 },
+  { cls: 'chair2', x: 100, y: 14, w: 24, h: 20 },
+  { cls: 'chair2', x: 56, y: 104, w: 24, h: 20 },
+  { cls: 'chair2', x: 100, y: 104, w: 24, h: 20 },
+  { cls: 'chair2', x: 6, y: 48, w: 20, h: 24 },
+  { cls: 'chair2', x: 154, y: 48, w: 20, h: 24 },
+];
+const FRAME_BLOCKS = [
+  { cls: 'frameOuter', x: 0, y: 0, w: 40, h: 30 },
+  { cls: 'frameSky', x: 4, y: 4, w: 32, h: 12 },
+  { cls: 'frameGround', x: 4, y: 16, w: 32, h: 10 },
+];
+const COUNTER_BLOCKS = [
+  { cls: 'counterShadow', x: 20, y: 92, w: 160, h: 10 },
+  { cls: 'counterTop', x: 10, y: 56, w: 180, h: 14 },
+  { cls: 'counterFront', x: 10, y: 70, w: 180, h: 28 },
+  { cls: 'monbody', x: 30, y: 40, w: 26, h: 18 },
+  { cls: 'monscreen', x: 33, y: 43, w: 20, h: 12 },
+  { cls: 'torso', x: 84, y: 14, w: 32, h: 30 },
+  { cls: 'head', x: 92, y: -2, w: 18, h: 18 },
+  { cls: 'hair', x: 92, y: -6, w: 18, h: 8 },
+  { cls: 'crown', x: 97, y: -12, w: 8, h: 8 },
+];
+
+function addPerson(container, { nom, rol, roleColor, active, pct }) {
+  const unit = buildUnit('desk-unit', DESK_BLOCKS, { roleColor, active });
+  const label = document.createElement('div');
+  label.className = 'desk-label';
+  const hpFilled = Math.min(10, Math.round(pct / 10));
+  const hp = Array.from({ length: 10 }, (_, i) => `<i class="${i < hpFilled ? 'on' : ''}"></i>`).join('');
+  label.innerHTML = `<div class="nm">${nom}</div><div class="rl">${rol}</div><div class="hpbar">${hp}</div>`;
+  unit.appendChild(label);
+  container.appendChild(unit);
+}
+
+// --- Las 4 salas, con las mismas 8 personas y porcentajes de tus capturas ---
+const ROOMS = {
+  'room-a1': [
+    { nom: 'ANDREA M.', rol: 'Usuario', roleColor: '#168A43', active: true, pct: 36 },
+    { nom: 'ANGIE P.', rol: 'Usuario', roleColor: '#168A43', active: false, pct: 0 },
+    { nom: 'CLAUDIA M.', rol: 'Usuario', roleColor: '#168A43', active: true, pct: 200 },
+  ],
+  'room-a2': [
+    { nom: 'CLAUDIA S.', rol: 'Usuario', roleColor: '#168A43', active: true, pct: 70 },
+    { nom: 'DIANA F.', rol: 'Usuario', roleColor: '#168A43', active: false, pct: 50 },
+  ],
+  'room-a3': [
+    { nom: 'EVELYN L.', rol: 'Usuario', roleColor: '#168A43', active: false, pct: 0 },
+    { nom: 'FRANCISCO C.', rol: 'Usuario', roleColor: '#168A43', active: false, pct: 0 },
+  ],
+  'room-a4': [
+    { nom: 'GINNA T.', rol: 'Usuario', roleColor: '#168A43', active: false, pct: 0 },
+  ],
+};
+Object.entries(ROOMS).forEach(([roomId, people]) => {
+  const el = document.getElementById(roomId);
+  people.forEach(p => addPerson(el, p));
+  el.appendChild(buildUnit('plant-unit', PLANT_BLOCKS));
+});
+
+// --- Mesa de juntas, marco de pared y mostrador de recepción ---
+document.getElementById('table-slot').appendChild(buildUnit('', TABLE_BLOCKS));
+document.getElementById('frame-slot').appendChild(buildUnit('', FRAME_BLOCKS));
+
+const reception = document.getElementById('pixel-reception');
+reception.appendChild(buildUnit('plant-unit', PLANT_BLOCKS));
+const counter = buildUnit('counter-unit', COUNTER_BLOCKS, { roleColor: '#12212D' });
+counter.querySelector('.blk.monscreen').style.background = '#6FE3A0';
+const counterLabel = document.createElement('div');
+counterLabel.className = 'counter-label';
+counterLabel.innerHTML = 'CAMILO GARCÍA<br>Super Admin';
+counter.appendChild(counterLabel);
+reception.appendChild(counter);
+reception.appendChild(buildUnit('plant-unit', PLANT_BLOCKS));
+</script>
+</body>
+</html>

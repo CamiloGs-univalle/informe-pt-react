@@ -1,23 +1,6 @@
-import { useState, useEffect, createContext, useContext, useCallback } from "react";
-
-const ToastContext = createContext();
-
-export function useToast() { return useContext(ToastContext); }
-
-export function ToastProvider({ children }) {
-  const [msg, setMsg] = useState("");
-  const [show, setShow] = useState(false);
-
-  const toast = useCallback((m) => {
-    setMsg(m);
-    setShow(true);
-    setTimeout(() => setShow(false), 3000);
-  }, []);
-
-  return (
-    <ToastContext.Provider value={toast}>
-      {children}
-      <div className={"toast" + (show ? " on" : "")}>{msg}</div>
-    </ToastContext.Provider>
-  );
-}
+/**
+ * MOVED to src/views/common/Toast.jsx — see docs/ARCHITECTURE.md and
+ * CHANGELOG.md. Kept as a re-export for backwards compatibility; safe to
+ * delete once confirmed unused elsewhere.
+ */
+export { ToastProvider, useToast } from '../views/common/Toast.jsx';

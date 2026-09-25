@@ -1,0 +1,16 @@
+{
+  "project": "informe-pt-react",
+  "team": "Proservis Temporales — Grupo de Desarrolladores",
+  "stack": "React 19 + Vite + Firebase Auth + localStorage",
+  "permissions": {
+    "allowBash": true,
+    "allowFileEdit": true,
+    "allowedPaths": ["src/**", "docs/**", "public/**", "*.md", "*.json"]
+  },
+  "workflow": {
+    "beforeEdit": "leer docs/ARCHITECTURE.md y src/models/constants.js",
+    "beforeBuild": "npm run build",
+    "roles": ["super_admin", "admin", "usuario"],
+    "modules": ["headcount", "seleccion", "rotacion", "sst", "nomina", "ausentismo", "capacitacion", "clima", "facturacion", "fotos"]
+  }
+}
