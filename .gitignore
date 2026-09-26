@@ -24,3 +24,10 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Credenciales Firebase Admin — NUNCA deben ir al repo
+serviceAccountKey.json
+*.serviceAccountKey.json
+
+# Export temporal usado para migrar datos reales a Firestore (contiene datos de clientes)
+ps_v3-export.json

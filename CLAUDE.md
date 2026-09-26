@@ -3,8 +3,11 @@
 Este archivo es leído por Claude Code / OpenCode al iniciar sesión. Define cómo trabajar en este repo sin romper la arquitectura.
 
 ## Stack
-- React 19 + Vite, HashRouter, Firebase Auth (reportes-pt-ejecutivos), xlsx, html2pdf.js, localStorage como DB.
-- Sin backend. Toda persistencia en `src/models/db.js` → `localStorage["ps_v3"]`.
+- React 19 + Vite, HashRouter, Firebase Auth (reportes-pt-ejecutivos), Firestore, xlsx, html2pdf.js.
+- Firestore es la fuente de verdad (colecciones `ejecutivos, clientes, informes, workspaces, areas, moduloConfigs, contribuciones`,
+  ver `firestore.rules`). `src/models/db.js` mantiene un espejo en `localStorage["ps_v3"]` solo como caché de lectura rápida:
+  al arrancar (`loadDB()`) siempre se carga primero desde Firestore; cada `saveDB()` reenvía el estado local a Firestore
+  vía `services/firebaseSync.service.js` (crea/actualiza/borra por diff de ids, ver esa clase para el detalle).
 
 ## Arquitectura (ver `docs/ARCHITECTURE.md`)
 ```
@@ -50,10 +53,9 @@ Catálogo en `src/models/constants.js: MODULOS`:
 ## Flujo colaborativo (Contribuciones)
 Varias áreas (Selección, SST, Atención al Cliente/Ejecutivos, Bienestar — ver `DB.areas` en
 `models/db.js`) suben su parte del informe de un cliente/período por separado; el Ejecutivo líder
-del cliente valida cada parte y genera el informe fusionado. **Esto vive completo en
-`localStorage` — no hay backend que sincronice entre navegadores/equipos distintos** (ver
-"Roadmaps abiertos"), así que hoy funciona bien cuando el equipo comparte el mismo computador/perfil
-de navegador; en varios dispositivos cada uno tiene su propia copia de `ps_v3`.
+del cliente valida cada parte y genera el informe fusionado. Esto ya sincroniza a Firestore
+(ver `services/firebaseSync.service.js`), así que funciona entre navegadores/equipos distintos;
+`localStorage` es solo la caché local de cada sesión, no la fuente de verdad.
 - `models/Contribucion.js`: entidad `Contribucion` (cliId × per × areaId), estados
   `pendiente → en_proceso → completado → validado` (o `rechazado`), `ESTADO_META` — ícono/label/
   color de cada estado, fuente única para cualquier vista que los pinte — y `rechazosCount`, que
@@ -164,7 +166,7 @@ Si no se definen, usa defaults de `reportes-pt-ejecutivos`. Firebase config es p
 
 ## Roadmaps abiertos
 - Code-split por ruta (chunk 2.2MB actual).
-- Hash de contraseñas local (hoy plain text para demo).
-- Migrar `localStorage` a Firestore/REST cuando haya backend.
+- Hashear contraseñas (hoy se guardan en texto plano en el doc de Firestore, heredado del modelo local — ver `firestore.service.js: saveEj`).
+- `firestore.rules` solo permite `write` en `ejecutivos/*` a `super_admin`; si un `admin` de área necesita crear/editar ejecutivos de su equipo, ampliar esa regla a `isAdmin()`.
 
 ¿Dudas? Ver `docs/ARCHITECTURE.md`, `docs/MODEL.md`, `CHANGELOG.md`.

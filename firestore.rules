@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper: get current user's role from their document
+    function getUserRole() {
+      return get(/databases/$(database)/documents/ejecutivos/$(request.auth.uid)).data.role;
+    }
+    
+    function isSuperAdmin() {
+      return getUserRole() == 'super_admin';
+    }
+    
+    function isAdmin() {
+      return getUserRole() == 'admin' || isSuperAdmin();
+    }
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // User can read their own document, super_admin reads all
+    match /ejecutivos/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin() || isAdmin());
+      allow write: if isSuperAdmin();
+    }
+    
+    // Clientes: visible to assigned ejecutivo, area users, and admins
+    match /clientes/{cliId} {
+      allow read: if isAuthenticated() && (
+        // Super admin sees all
+        isSuperAdmin() ||
+        // Admin sees all in their workspace
+        (isAdmin() && resource.data.workspaceId == get(/databases/$(database)/documents/ejecutivos/$(request.auth.uid)).data.workspaceId) ||
+        // Ejecutivo assigned to client
+        resource.data.ejId == request.auth.uid ||
+        // User assigned to client area
+        (resource.data.asignaciones != null && request.auth.uid in resource.data.asignaciones)
+      );
+      allow create: if isAdmin() || isSuperAdmin();
+      allow update: if isAdmin() || isSuperAdmin() || 
+        (resource.data.ejId == request.auth.uid && request.resource.data.ejId == resource.data.ejId);
+      allow delete: if isSuperAdmin();
+    }
+    
+    // Informes: owner + admins + super_admin
+    match /informes/{infId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() ||
+        (isAdmin() && resource.data.workspaceId == get(/databases/$(database)/documents/ejecutivos/$(request.auth.uid)).data.workspaceId) ||
+        resource.data.ejId == request.auth.uid
+      );
+      allow create: if isAuthenticated() && (
+        resource.data.ejId == request.auth.uid || isAdmin() || isSuperAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        resource.data.ejId == request.auth.uid || isAdmin() || isSuperAdmin()
+      );
+      allow delete: if isSuperAdmin();
+    }
+    
+    // Workspaces: super_admin only
+    match /workspaces/{wsId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin();
+    }
+    
+    // Areas: super_admin writes, everyone reads their workspace
+    match /areas/{areaId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() ||
+        resource.data.workspaceId == get(/databases/$(database)/documents/ejecutivos/$(request.auth.uid)).data.workspaceId
+      );
+      allow write: if isSuperAdmin();
+    }
+    
+    // ModuloConfigs: user owns their config, super_admin all
+    match /moduloConfigs/{configId} {
+      allow read: if isAuthenticated() && (
+        configId == request.auth.uid || 
+        configId.matches(request.auth.uid + '_.*') ||
+        isSuperAdmin()
+      );
+      allow write: if isAuthenticated() && (
+        configId == request.auth.uid || 
+        configId.matches(request.auth.uid + '_.*') ||
+        isSuperAdmin()
+      );
+    }
+    
+    // Contribuciones: area users + ejecutivo + admins
+    match /contribuciones/{ctId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() ||
+        (isAdmin() && resource.data.workspaceId == get(/databases/$(database)/documents/ejecutivos/$(request.auth.uid)).data.workspaceId) ||
+        resource.data.userId == request.auth.uid ||
+        // Ejecutivo sees all contributions for their clients
+        exists(/databases/$(database)/documents/clientes/$(resource.data.cliId)) &&
+        get(/databases/$(database)/documents/clientes/$(resource.data.cliId)).data.ejId == request.auth.uid
+      );
+      allow create: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() || isSuperAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() || isSuperAdmin()
+      );
+      allow delete: if isSuperAdmin();
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

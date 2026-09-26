@@ -1,4 +1,4 @@
-import { LB, LC } from '../assets/logos';
+import { LB } from '../assets/logos';
 import { FOTOLABELS } from '../models/constants';
 import { MESES_LARGOS } from '../utils/format';
 import { donutSVG, donutLegendSVG, hBarSVG, vBarSVG, gaugeSVG, lineSVG } from './chart.service.js';
@@ -204,6 +204,6 @@ export function buildInformeHTML(d, rqs, motivos, casos, fotos, extras = {}) {
     + ausHTML + capHTML + climaHTML + facHTML
     + (isActive(active, 'fotos') ? '<div id="t-act" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Actividades — Registro fotográfico</h2><p>' + mesStr + '</p></div><div class="card"><div class="ct">Galería — 9 espacios</div><div class="fg">' + fotosHTML + '</div></div></div>\n' : '')
     + '</main>\n'
-    + '<footer class="ftr"><img src="data:image/png;base64,' + LC + '" class="flogo" alt="Proservis"><div class="ftxt">Informe · <strong>' + d.cliNom + (d.cliMarca ? ' (' + d.cliMarca + ')' : '') + '</strong> · ' + mesStr + ' · Confidencial — Uso interno cliente / Proservis</div><div style="color:rgba(255,255,255,.55);font-size:11px;text-align:right">Conectamos personas<br>con una mejor calidad de vida<br><span style="opacity:.6">Generado: ' + new Date().toLocaleDateString('es-CO') + '</span></div></footer>\n'
+    + '<footer class="ftr"><img src="data:image/png;base64,' + LB + '" class="flogo" alt="Proservis"><div class="ftxt">Informe · <strong>' + d.cliNom + (d.cliMarca ? ' (' + d.cliMarca + ')' : '') + '</strong> · ' + mesStr + ' · Confidencial — Uso interno cliente / Proservis</div><div style="color:rgba(255,255,255,.55);font-size:11px;text-align:right">Conectamos personas<br>con una mejor calidad de vida<br><span style="opacity:.6">Generado: ' + new Date().toLocaleDateString('es-CO') + '</span></div></footer>\n'
     + '<script>\nfunction st(n,b){document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("on")});document.querySelectorAll(".nb").forEach(function(x){x.classList.remove("on")});document.getElementById("t-"+n).classList.add("on");if(b)b.classList.add("on");window.scrollTo({top:0,behavior:"smooth"});}\nfunction td(id){var r=document.getElementById(id);if(r)r.style.display=(r.style.display==="table-row")?"none":"table-row";}\n</script>\n</body>\n</html>';
 }

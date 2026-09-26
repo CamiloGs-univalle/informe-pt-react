@@ -21,8 +21,18 @@ import AppRoutes from './routes/AppRoutes';
 export default function App() {
   const [user, setUser] = useState(() => getCurrentUser());
   const [ejs, setEjs] = useState([]);
+  const [dbReady, setDbReady] = useState(false);
 
-  useEffect(() => { loadDB(); setEjs(getEjs()); }, []);
+  useEffect(() => {
+    let mounted = true;
+    loadDB().then(() => {
+      if (mounted) {
+        setEjs(getEjs());
+        setDbReady(true);
+      }
+    });
+    return () => { mounted = false; };
+  }, []);
 
   // Firebase auth listener (opcional, no bloquea). Se suscribe una sola vez;
   // usa la forma funcional de setUser (en vez de leer `user` del closure)
@@ -63,6 +73,17 @@ export default function App() {
     const target = getEjs().find(x => x.id === id);
     if (target) { setCurrentUser(target); setUser(target); }
   };
+
+  if (!dbReady) {
+    return (
+      <div style={{display:'flex',height:'100vh',alignItems:'center',justifyContent:'center',background:'#F1F3EF'}}>
+        <div style={{textAlign:'center'}}>
+          <div style={{fontSize:24,marginBottom:16,color:'#168A43'}}>⚙️</div>
+          <div style={{fontSize:16,color:'#12212D'}}>Cargando datos desde Firebase...</div>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
