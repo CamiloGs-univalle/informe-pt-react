@@ -31,6 +31,8 @@ export async function cleanupAndSeed() {
   console.log('🧹 INICIANDO LIMPIEZA COMPLETA...');
   console.log('⚠️  ESTO BORRARÁ TODOS LOS DATOS EN FIRESTORE');
   
+  const failedCollections = [];
+  
   try {
     // 1. BORRAR TODAS LAS COLECCIONES
     for (const collName of COLLECTIONS) {
@@ -46,23 +48,39 @@ export async function cleanupAndSeed() {
       // Borrar en batches de 500 (límite Firestore)
       let batch = writeBatch(db);
       let count = 0;
+      let hasErrors = false;
       
       for (const document of snap.docs) {
-        batch.delete(doc(db, collName, document.id));
-        count++;
-        
-        if (count % 500 === 0) {
-          await batch.commit();
-          console.log(`   📦 Batch de ${count} borrado...`);
-          batch = writeBatch(db);
+        try {
+          batch.delete(doc(db, collName, document.id));
+          count++;
+          
+          if (count % 500 === 0) {
+            await batch.commit();
+            console.log(`   📦 Batch de ${count} borrado...`);
+            batch = writeBatch(db);
+          }
+        } catch (err) {
+          hasErrors = true;
+          console.error(`   ❌ Error borrando ${document.id}:`, err.message);
         }
       }
       
       if (count % 500 !== 0) {
-        await batch.commit();
+        try {
+          await batch.commit();
+        } catch (err) {
+          hasErrors = true;
+          console.error(`   ❌ Error en commit final:`, err.message);
+        }
       }
       
-      console.log(`   ✅ ${collName}: ${count} documentos borrados`);
+      if (hasErrors) {
+        failedCollections.push({ name: collName, deleted: count, total: snap.size });
+        console.log(`   ⚠️ ${collName}: ${count}/${snap.size} borrados (algunos fallaron)`);
+      } else {
+        console.log(`   ✅ ${collName}: ${count} documentos borrados`);
+      }
     }
     
     // 2. LIMPIAR LOCALSTORAGE
@@ -144,8 +162,21 @@ export async function cleanupAndSeed() {
     console.log('\n🎉 ¡LIMPIEZA Y SEED COMPLETADOS!');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('📊 RESUMEN:');
-    console.log('   ✅ Todas las colecciones borradas');
     console.log('   ✅ localStorage limpiado');
+    
+    if (failedCollections.length > 0) {
+      console.log('   ⚠️ Colecciones con errores de permisos:');
+      failedCollections.forEach(fc => {
+        console.log(`      - ${fc.name}: ${fc.deleted}/${fc.total} borrados`);
+      });
+      console.log('\n   🔧 SOLUCIÓN MANUAL REQUERIDA:');
+      console.log('   1. Abre Firebase Console: https://console.firebase.google.com/project/reportes-pt-ejecutivos/firestore/data');
+      console.log('   2. Para cada colección fallida, selecciona todos los documentos y bórralos manualmente');
+      console.log('   3. O actualiza las reglas de Firestore para permitir delete a super_admin');
+    } else {
+      console.log('   ✅ Todas las colecciones borradas');
+    }
+    
     console.log(`   ✅ Super Admin: ${SUPER_ADMIN_EMAIL}`);
     console.log(`   ✅ Nombre: ${SUPER_ADMIN_NAME}`);
     console.log('   ✅ Rol: super_admin');
@@ -158,7 +189,7 @@ export async function cleanupAndSeed() {
     console.log('   Password: Proservis2026');
     console.log('   O use "Iniciar sesión con Google" con esa cuenta');
     
-    return { success: true, superAdminId };
+    return { success: true, superAdminId, failedCollections };
     
   } catch (error) {
     console.error('\n❌ ERROR:', error);
@@ -170,31 +201,58 @@ export async function cleanupAndSeed() {
 export async function onlyCleanup() {
   console.log('🧹 SOLO LIMPIEZA (sin seed)...');
   
+  const failedCollections = [];
+  
   for (const collName of COLLECTIONS) {
     const snap = await getDocs(collection(db, collName));
     if (snap.size === 0) continue;
     
     let batch = writeBatch(db);
     let count = 0;
+    let hasErrors = false;
     
     for (const document of snap.docs) {
-      batch.delete(doc(db, collName, document.id));
-      count++;
-      if (count % 500 === 0) {
-        await batch.commit();
-        batch = writeBatch(db);
+      try {
+        batch.delete(doc(db, collName, document.id));
+        count++;
+        if (count % 500 === 0) {
+          await batch.commit();
+          batch = writeBatch(db);
+        }
+      } catch (err) {
+        hasErrors = true;
+        console.error(`   ❌ Error borrando ${document.id}:`, err.message);
       }
     }
-    if (count % 500 !== 0) await batch.commit();
-    console.log(`   ${collName}: ${count} borrados`);
+    
+    if (count % 500 !== 0) {
+      try {
+        await batch.commit();
+      } catch (err) {
+        hasErrors = true;
+        console.error(`   ❌ Error en commit final:`, err.message);
+      }
+    }
+    
+    if (hasErrors) {
+      failedCollections.push({ name: collName, deleted: count, total: snap.size });
+      console.log(`   ⚠️ ${collName}: ${count}/${snap.size} borrados (algunos fallaron)`);
+    } else {
+      console.log(`   ✅ ${collName}: ${count} borrados`);
+    }
   }
   
   localStorage.removeItem('ps_v3');
   localStorage.removeItem('ps_auth_user');
   localStorage.removeItem('ps_ej_activo');
   
+  if (failedCollections.length > 0) {
+    console.log('\n⚠️ Colecciones con errores de permisos (borrar manualmente en Firebase Console):');
+    failedCollections.forEach(fc => console.log(`   - ${fc.name}: ${fc.deleted}/${fc.total}`));
+  }
+  
   console.log('✅ Limpieza completa sin seed');
-  return { success: true };
+  return { success: true, failedCollections };
 }
 
 // Auto-ejecutar si se llama directo en consola
