@@ -12,7 +12,7 @@
  * while Firestore stayed completely empty — which is exactly the bug this
  * fixes. Any use of the fallback is logged loudly so it's never invisible.
  */
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import { authenticateLocal, getUserByEmail } from '../models/Ejecutivo';
 
@@ -70,5 +70,73 @@ export async function loginWithEmailPassword(email, password) {
         ? 'Revisa tu contraseña. Pista demo: Proservis2026'
         : 'Usuario no encontrado. Usa una cuenta demo abajo.',
     };
+  }
+}
+
+/**
+ * Attempts to authenticate a user with Google Sign-In.
+ * Links to local user by email if exists, otherwise creates minimal profile.
+ *
+ * @returns {Promise<{ user?: object, error?: string }>}
+ */
+export async function loginWithGoogle() {
+  try {
+    const provider = new GoogleAuthProvider();
+    // Forzar selección de cuenta (útil si hay múltiples sesiones de Google)
+    provider.setCustomParameters({ prompt: 'select_account' });
+    
+    const cred = await signInWithPopup(auth, provider);
+    const em = (cred.user.email || '').toLowerCase();
+    
+    if (!em) {
+      return { error: 'No se pudo obtener el email de la cuenta Google.' };
+    }
+
+    // Enrich with local role/profile if exists
+    const local = getUserByEmail(em);
+    const user = local
+      ? { ...local, firebaseUid: cred.user.uid, email: cred.user.email, photoURL: cred.user.photoURL }
+      : { 
+          id: cred.user.uid, 
+          nom: cred.user.displayName || cred.user.email.split('@')[0], 
+          email: cred.user.email, 
+          role: 'usuario', 
+          workspaceId: 'w1', 
+          areaId: 'a1',
+          photoURL: cred.user.photoURL
+        };
+    
+    console.log('[AUTH] Google login exitoso:', em, user.role);
+    return { user };
+  } catch (fbErr) {
+    const code = fbErr?.code || '';
+    console.error('[AUTH] Google login falló:', code, fbErr?.message);
+    
+    if (code.includes('popup-closed-by-user')) {
+      return { error: 'Ventana de Google cerrada. Intenta de nuevo.' };
+    }
+    if (code.includes('auth/cancelled-popup-request')) {
+      return { error: 'Solicitud cancelada. Intenta de nuevo.' };
+    }
+    if (code.includes('network-request-failed') || code.includes('auth/internal-error')) {
+      return { error: 'Error de conexión con Google. Verifica tu internet.' };
+    }
+    if (code.includes('auth/account-exists-with-different-credential')) {
+      return { error: 'Esta cuenta ya existe con otro método de acceso. Usa email/contraseña.' };
+    }
+    return { error: 'No se pudo iniciar sesión con Google. ' + (fbErr?.message || 'Error desconocido') };
+  }
+}
+
+/**
+ * Sign out from Firebase Auth.
+ */
+export async function logout() {
+  try {
+    await signOut(auth);
+    return { success: true };
+  } catch (error) {
+    console.error('[AUTH] Logout falló:', error);
+    return { error: error.message };
   }
 }
