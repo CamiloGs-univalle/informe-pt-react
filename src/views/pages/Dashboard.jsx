@@ -174,6 +174,17 @@ export default function Dashboard({ ejId, user }) {
             <div className="brow"><Link to="/equipo" className="btn bam bsm">Ver detalle equipo →</Link></div>
           </div>
 
+          <div className="card" style={{ borderTop: '3px solid #12212D', background: '#FAFAFA' }}>
+            <div className="ct">⚙️ Mis módulos — configuración global Super Admin</div>
+            <MyModulesGrid cfg={cfg} />
+            <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span>Configuración guardada para <strong>{user?.email}</strong>.</span>
+              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📄 {mis.length} clientes totales</span>
+              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📊 {kpis.tot} informes históricos</span>
+            </div>
+            <div className="brow"><Link to="/config-modulos" className="btn bam bsm">Configurar módulos →</Link><Link to="/nuevo" className="btn bvd bsm">Nuevo informe</Link></div>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>
             <div className="card" style={{ marginBottom: 0 }}>
               <div className="ct">🧩 Adopción de módulos — toda la organización</div>
@@ -193,6 +204,17 @@ export default function Dashboard({ ejId, user }) {
             <div className="ct">👥 Mi equipo — seguimiento mensual con indicadores</div>
             <TeamGrid team={team} />
             <div className="brow"><Link to="/equipo" className="btn bvd bsm">Asignar clientes →</Link><Link to="/aejecutivos" className="btn bgh bsm">Gestionar personas</Link></div>
+          </div>
+
+          <div className="card" style={{ borderTop: '3px solid #168A43', background: '#FAFAFA' }}>
+            <div className="ct">⚙️ Mis módulos — configuración Administrador</div>
+            <MyModulesGrid cfg={cfg} />
+            <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span>Configuración guardada para <strong>{user?.email}</strong>.</span>
+              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📄 {mis.length} clientes</span>
+              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📊 {kpis.tot} informes históricos</span>
+            </div>
+            <div className="brow"><Link to="/config-modulos" className="btn bam bsm">Configurar módulos →</Link><Link to="/nuevo" className="btn bvd bsm">Nuevo informe</Link></div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>

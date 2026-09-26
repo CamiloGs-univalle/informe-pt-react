@@ -8,32 +8,43 @@ import { useState, useEffect } from 'react';
 import { MODULOS } from '../../models/constants';
 import { getModuloConfig, saveModuloConfig, getModuloConfigForClient, saveModuloConfigForClient } from '../../models/ModuloConfig';
 import { getClisForEj, getClis } from '../../models/Cliente';
+import { getEjs } from '../../models/Ejecutivo';
 import { useToast } from '../common/useToast';
 
 export default function ConfigModulos({ user }) {
   const toast = useToast();
-  const [cfg, setCfg] = useState(() => getModuloConfig(user?.id));
+  const isSuper = user?.role === 'super_admin';
+  const [targetUserId, setTargetUserId] = useState(user?.id);
+  const [cfg, setCfg] = useState(() => getModuloConfig(targetUserId));
+  const [targetUser, setTargetUser] = useState(null);
+  const [allUsers, setAllUsers] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [selCli, setSelCli] = useState('');
   const [cliCfg, setCliCfg] = useState(null);
 
   useEffect(() => {
-    const clis = user ? (getClisForEj(user.id).length ? getClisForEj(user.id) : getClis().slice(0, 5)) : [];
+    const allEjs = getEjs();
+    if (isSuper) {
+      setAllUsers(allEjs.filter(u => u.role !== 'super_admin'));
+    }
+    const clis = targetUserId ? (getClisForEj(targetUserId).length ? getClisForEj(targetUserId) : getClis().slice(0, 5)) : [];
     setClientes(clis);
-  }, [user]);
+    setTargetUser(allEjs.find(u => u.id === targetUserId) || user);
+    setCfg(getModuloConfig(targetUserId));
+  }, [targetUserId, isSuper, user]);
 
   useEffect(() => {
-    if (selCli) setCliCfg(getModuloConfigForClient(user?.id, selCli));
+    if (selCli) setCliCfg(getModuloConfigForClient(targetUserId, selCli));
     else setCliCfg(null);
-  }, [selCli, user]);
+  }, [selCli, targetUserId]);
 
   const toggle = (id) => {
     const next = { ...cfg, [id]: !cfg[id] };
     setCfg(next);
   };
   const save = () => {
-    saveModuloConfig(user?.id, cfg);
-    toast('Configuración guardada Señor — la próxima ya queda lista');
+    saveModuloConfig(targetUserId, cfg);
+    toast(`Configuración guardada para ${targetUser?.nom || 'usuario'} Señor`);
   };
   const toggleCli = (id) => {
     const next = { ...cliCfg, [id]: !cliCfg[id] };
@@ -41,7 +52,7 @@ export default function ConfigModulos({ user }) {
   };
   const saveCli = () => {
     if (!selCli) return;
-    saveModuloConfigForClient(user?.id, selCli, cliCfg);
+    saveModuloConfigForClient(targetUserId, selCli, cliCfg);
     toast('Configuración por cliente guardada');
   };
   const allOn = () => setCfg(Object.fromEntries(MODULOS.map(m => [m.id, true])));
@@ -51,13 +62,42 @@ export default function ConfigModulos({ user }) {
 
   return (
     <div>
-      <div className="ph">Configurar Módulos <span style={{ fontSize: 11, color: 'var(--grt)', fontWeight: 600 }}>Usuario · Se guarda para la próxima</span></div>
-      <div className="ps">El usuario elige qué módulos aparecen en su informe. La configuración queda guardada y la próxima vez ya está lista. Puede tener una config global y una por cliente.</div>
+      <div className="ph">Configurar Módulos 
+        {isSuper ? (
+          <span style={{ fontSize: 11, color: 'var(--grt)', fontWeight: 600, marginLeft: 8 }}>
+            Super Admin · Configura para cualquier usuario
+          </span>
+        ) : (
+          <span style={{ fontSize: 11, color: 'var(--grt)', fontWeight: 600 }}>Usuario · Se guarda para la próxima</span>
+        )}
+      </div>
+      <div className="ps">{isSuper 
+        ? 'Como Super Admin, puedes configurar los módulos de cualquier usuario del sistema. Selecciona un usuario abajo.'
+        : 'El usuario elige qué módulos aparecen en su informe. La configuración queda guardada y la próxima vez ya está lista. Puede tener una config global y una por cliente.'}
+      </div>
+
+      {isSuper && (
+        <div className="card" style={{ borderTop: '3px solid #12212D', background: '#FAFAFA', marginBottom: 14 }}>
+          <div className="ct">👤 Seleccionar usuario a configurar</div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select className="finput" value={targetUserId} onChange={e => setTargetUserId(e.target.value)} style={{ minWidth: 300, maxWidth: 400 }}>
+              {allUsers.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.nom} {u.role === 'admin' ? '◆ Admin' : ''} — {u.email} {u.activo === false && '(inactivo)'}
+                </option>
+              ))}
+            </select>
+            <span style={{ fontSize: 12, color: '#12212D', fontWeight: 700 }}>
+              Usuario actual: <strong>{targetUser?.nom}</strong> ({targetUser?.role})
+            </span>
+          </div>
+        </div>
+      )}
 
       <div className="kgrid">
         <div className="kpi" style={{ borderLeftColor: '#168A43' }}><div className="kl">Módulos activos</div><div className="kv">{activeCount}/{MODULOS.length}</div><div className="ks">Config global</div></div>
         <div className="kpi am"><div className="kl">Cliente seleccionado</div><div className="kv" style={{ fontSize: 14 }}>{selCli ? (clientes.find(c => c.id === selCli)?.nom || selCli) : 'Global'}</div><div className="ks">{selCli ? 'Config específica' : 'Aplica a todos'}</div></div>
-        <div className="kpi"><div className="kl">Usuario</div><div className="kv" style={{ fontSize: 14 }}>{user?.nom}</div><div className="ks">{user?.email}</div></div>
+        <div className="kpi"><div className="kl">Usuario</div><div className="kv" style={{ fontSize: 14 }}>{targetUser?.nom}</div><div className="ks">{targetUser?.email} {targetUser?.role === 'admin' && '◆ Admin'}</div></div>
       </div>
 
       <div className="card" style={{ borderTop: '3px solid #168A43' }}>
@@ -79,7 +119,7 @@ export default function ConfigModulos({ user }) {
             </label>
           ))}
         </div>
-        <div className="alrt avd" style={{ marginTop: 12, fontSize: 11 }}>Esta configuración se usa en <strong>Nuevo informe</strong> para decidir qué secciones mostrar. Si desactivas un módulo, no se pedirá ni se exportará.</div>
+        <div className="alrt avd" style={{ marginTop: 12, fontSize: 11 }}>Esta configuración se usa en <strong>Nuevo informe</strong> para decidir qué secciones mostrar para <strong>{targetUser?.nom}</strong>. Si desactivas un módulo, no se pedirá ni se exportará.</div>
       </div>
 
       <div className="card" style={{ borderTop: '3px solid #E8BB26' }}>
@@ -114,7 +154,7 @@ export default function ConfigModulos({ user }) {
           ))}
           {activeCount === 0 && <span className="b bbd">Ningún módulo activo — el informe saldrá vacío</span>}
         </div>
-        <div style={{ fontSize: 11, color: '#0F6B33', marginTop: 8 }}>{activeCount} módulos se incluirán en el PDF/HTML. La próxima vez que entres a <strong>Nuevo informe</strong>, ya verás esta configuración cargada.</div>
+        <div style={{ fontSize: 11, color: '#0F6B33', marginTop: 8 }}>{activeCount} módulos se incluirán en el PDF/HTML para <strong>{targetUser?.nom}</strong>. La próxima vez que <strong>{targetUser?.nom}</strong> entre a <strong>Nuevo informe</strong>, ya verá esta configuración cargada.</div>
       </div>
     </div>
   );
