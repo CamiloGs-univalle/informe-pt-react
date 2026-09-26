@@ -118,7 +118,10 @@ async function syncModuloConfigs() {
 }
 
 async function flushWrites() {
-  if (!syncEnabled) return;
+  if (!syncEnabled) {
+    console.warn('[FirebaseSync] flushWrites called but sync not enabled');
+    return;
+  }
   writeTimer = null;
   try {
     await Promise.all([
@@ -135,12 +138,8 @@ async function flushWrites() {
   } catch (error) {
     lastSyncError = error;
     console.error('[FirebaseSync] Falló la sincronización:', error);
+    throw error; // Re-lanzar para que el caller se entere
   }
-}
-
-function scheduleWrite() {
-  if (writeTimer) clearTimeout(writeTimer);
-  writeTimer = setTimeout(flushWrites, 1000);
 }
 
 // Mantiene el nombre histórico para no tener que tocar db.js: saveDB()
@@ -157,7 +156,7 @@ export function disableFirebaseSync() {
 }
 
 export async function forceSync() {
-  scheduleWrite();
+  // Limpia cualquier timer pendiente y ejecuta flush directamente
   if (writeTimer) { clearTimeout(writeTimer); writeTimer = null; }
   await flushWrites();
 }
@@ -182,7 +181,7 @@ export async function loadFromFirestore() {
     const toArr = snap => snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
     DB.ejs = toArr(ejsSnap);
-    DB.clis = toArr(clisSnap).map(c => ({ asignaciones: {}, ...c, asignaciones: c.asignaciones || {} }));
+    DB.clis = toArr(clisSnap).map(c => ({ asignaciones: c.asignaciones || {}, ...c }));
     DB.infs = toArr(infsSnap);
     DB.workspaces = toArr(wsSnap);
     DB.areas = toArr(areasSnap).map(a => ({ modulos: [], adminId: null, descripcion: '', ...a }));
