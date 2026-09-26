@@ -24,6 +24,7 @@ const MENU = [
   { path: '/aejecutivos', label: 'Personas', icon: 'users', ac:'#5A6A5A', roles: ['admin', 'super_admin'] },
   { section: 'Super Admin', roles: ['super_admin'] },
   { path: '/espacios', label: 'Espacios y Áreas', icon: 'monitor', ac:'#12212D', roles: ['super_admin'] },
+  { path: '/admin-data', label: 'Admin Datos (Peligroso)', icon: 'box', ac:'#C0392B', roles: ['super_admin'], badge: '⚠️' },
 ];
 
 /** Iconos inline (mismo set que barra-siamo.html) — la clave debe coincidir

@@ -23,6 +23,7 @@ import EquipoAdmin from '../views/pages/EquipoAdmin';
 import ConfigModulos from '../views/pages/ConfigModulos';
 import MisContribuciones from '../views/pages/MisContribuciones';
 import TableroColaborativo from '../views/pages/TableroColaborativo';
+import AdminData from '../views/pages/AdminData';
 import RequireRole from './RequireRole';
 
 export default function AppRoutes({ user, ejId, ejs, onLogout, onEjChange }) {
@@ -47,6 +48,7 @@ export default function AppRoutes({ user, ejId, ejs, onLogout, onEjChange }) {
 
         {/* Super Admin */}
         <Route path="/espacios" element={<RequireRole user={user} roles={['super_admin']}><SuperAdmin user={user} /></RequireRole>} />
+        <Route path="/admin-data" element={<RequireRole user={user} roles={['super_admin']}><AdminData user={user} /></RequireRole>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
