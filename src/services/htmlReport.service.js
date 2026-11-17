@@ -1,209 +1,526 @@
-import { LB } from '../assets/logos';
+/**
+ * services/htmlReport.service.js
+ * ─────────────────────────────────────────────────────────────────────────
+ * Arma el informe HTML que recibe el cliente final: un solo archivo, sin internet,
+ * que se lee en pantalla (pestañas, gráficas con explicación al pasar el mouse),
+ * se imprime y se convierte a PDF con todas las secciones.
+ *
+ * Quién hace qué:
+ *   reportMetrics.js  → cifras, semáforos, comparación con el mes anterior, mensajes y textos didácticos
+ *   reportCharts.js   → gráficas (SVG/HTML)
+ *   reportStyles.js   → CSS y script
+ *   este archivo      → ensambla las secciones
+ *
+ * Reglas: todo texto escrito por personas pasa por `esc()`/`parrafo()`; números y fechas en es-CO;
+ * un módulo desactivado no se dibuja; si falta un dato se dice con palabras (nada inventado).
+ */
+import { logoDataUri } from '../assets/logo';
 import { FOTOLABELS } from '../models/constants';
-import { MESES_LARGOS } from '../utils/format';
-import { donutSVG, donutLegendSVG, hBarSVG, vBarSVG, gaugeSVG, lineSVG } from './chart.service.js';
+import { fmtNum, fmtDec, fmtMoney, plural } from '../utils/format.js';
+import {
+  calcularMetricas, construirIndicadores, construirMensajes, contarSemaforos,
+  EXPLICA, glosarioDe, nombrePeriodo, METAS, moduloActivo, clasificarMotivo,
+} from './reportMetrics.js';
+import { esc, gauge, donut, leyenda, barras, cascada, panelMetas, comparar, COLOR } from './reportCharts.js';
+import { REPORT_CSS, REPORT_JS } from './reportStyles.js';
 
-function isActive(active, id) {
-  if (!active || !Array.isArray(active)) return true;
-  return active.includes(id);
+/** Texto libre con saltos de línea → HTML seguro. */
+const parrafo = (v) => esc(v).replace(/\r?\n/g, '<br>');
+const hay = (v) => v != null && String(v).trim() !== '';
+
+const CHIP = {
+  ok: ['✔', 'En meta'], warn: ['●', 'Vigilar'], bad: ['▲', 'Atención'], info: ['ℹ', 'Informativo'],
+};
+const chip = (estado, texto) => `<span class="chip ${estado}">${CHIP[estado]?.[0] || ''} ${esc(texto || CHIP[estado]?.[1] || '')}</span>`;
+
+const card = (titulo, cuerpo, { sub = '', cls = '' } = {}) =>
+  `<section class="card ${cls}"><h3>${esc(titulo)}</h3>${sub ? `<p class="sub">${esc(sub)}</p>` : ''}${cuerpo}</section>`;
+
+/** Banner con el nombre del módulo y la pregunta que responde. */
+const modHead = (clave, titulo, mes, cli) =>
+  `<header class="mod-hd"><div class="k">${esc(mes)} · ${esc(cli)}</div><h2>${esc(titulo)}</h2><p class="q">${esc(EXPLICA[clave]?.pregunta || '')}</p></header>`;
+
+/** "En una frase": la lectura del módulo para quien no es especialista. */
+const lectura = (tono, texto) => {
+  const ico = { ok: '✔', warn: '●', bad: '▲', info: 'ℹ' }[tono] || 'ℹ';
+  return `<div class="lectura ${tono === 'ok' ? '' : tono}"><span class="li" aria-hidden="true">${ico}</span><div><strong>En una frase</strong>${esc(texto)}</div></div>`;
+};
+
+/** Tarjeta pequeña de cifra dentro de cada módulo. */
+function kpi({ nombre, valor, unidad = '', estado = 'info', sub = '', meta = '', delta = null, ex = '' }) {
+  const d = delta ? `<div class="delta ${delta.tono}"><span aria-hidden="true">${delta.flecha}</span>${esc(delta.texto)}</div>` : '';
+  return `<article class="kpi ${estado}"><div class="kpi-hd"><span class="kpi-nom">${esc(nombre)}</span>${estado !== 'info' ? chip(estado) : ''}</div>`
+    + `<div class="kpi-val${String(valor).length > 10 ? ' largo' : ''}">${esc(valor)}${unidad ? `<small>${esc(unidad)}</small>` : ''}</div>`
+    + (meta ? `<div class="kpi-meta">${esc(meta)}</div>` : '')
+    + (sub ? `<div class="kpi-sub">${esc(sub)}</div>` : '') + d
+    + (ex ? `<div class="kpi-ex" style="display:block">${esc(ex)}</div>` : '')
+    + '</article>';
+}
+const kpis = (...items) => `<div class="kpis">${items.filter(Boolean).map(kpi).join('')}</div>`;
+
+/** "¿Qué significa y cómo se calcula?" plegable. */
+function explicacion(clave) {
+  const e = EXPLICA[clave]; if (!e) return '';
+  return `<details class="expl"><summary>💡 ¿Qué significa y cómo se calcula?</summary><dl class="expl-b">`
+    + `<div><dt>Qué mide</dt><dd>${esc(e.que)}</dd></div>`
+    + (e.formula ? `<div><dt>Cómo se calcula</dt><dd><div class="formula">${esc(e.formula)}</div></dd></div>` : '')
+    + `<div><dt>Cómo leerlo</dt><dd>${esc(e.leer)}</dd></div></dl></details>`;
 }
 
+const estadoDe = (ind, id) => ind.find(i => i.id === id);
+const deltaDe = (ind, id) => estadoDe(ind, id)?.delta || null;
+
+const TIPO = {
+  estructural: { nombre: 'Estructural', color: '#607D8B', estado: 'gris', desc: 'Terminó la obra o labor para la que se contrató a la persona. No depende de la empresa.' },
+  positivo: { nombre: 'Positivo', color: COLOR.info, estado: 'info', desc: 'La persona pasó a ser contratada directamente por el cliente.' },
+  evitable: { nombre: 'Evitable', color: COLOR.warn, estado: 'warn', desc: 'Motivos sobre los que se puede actuar con acompañamiento y mejores condiciones.' },
+  critico: { nombre: 'Crítico', color: COLOR.bad, estado: 'bad', desc: 'Abandono del puesto: suele indicar que algo falló en la inducción o el acompañamiento.' },
+};
+
+/* ───────────────────────── Secciones ───────────────────────── */
+
+function secSeleccion(c) {
+  const { m, rqs, ind } = c;
+  const e = estadoDe(ind, 'seleccion')?.estado || 'info';
+  let l;
+  if (!m.hayRq) l = lectura('info', 'Este mes no se registraron vacantes (requerimientos) para este cliente.');
+  else if (e === 'ok') l = lectura('ok', `Se cubrieron ${fmtNum(m.rqCon)} de ${fmtNum(m.rqSol)} vacantes (${fmtNum(m.pctSel)} %). La meta del 80 % está cumplida.`);
+  else if (e === 'warn') l = lectura('warn', `Se cubrieron ${fmtNum(m.rqCon)} de ${fmtNum(m.rqSol)} vacantes (${fmtNum(m.pctSel)} %). Faltan ${fmtNum(m.rqPend)} para llegar a la meta del 80 %.`);
+  else l = lectura('bad', `Solo se cubrieron ${fmtNum(m.rqCon)} de ${fmtNum(m.rqSol)} vacantes (${fmtNum(m.pctSel)} %). Está por debajo de 50 %: necesita atención inmediata.`);
+
+  const filas = (rqs || []).map(r => {
+    const sol = Number(r.solicitadas) || 0; const con = Number(r.contratadas) || 0;
+    const pct = sol > 0 ? Math.round(con / sol * 100) : 0;
+    const canc = String(r.nota || '').toLowerCase().includes('cancel');
+    const est = canc ? 'gris' : pct >= 90 ? 'ok' : pct >= 50 ? 'warn' : 'bad';
+    return `<tr><td>${esc(r.rq || '—')}</td><td>${esc(r.agencia || '—')}</td><td>${esc(r.ciudad || '—')}</td><td>${esc(r.cargo || '—')}</td><td class="c">${fmtNum(sol)}</td><td class="c">${fmtNum(con)}</td><td class="c">${fmtNum(Math.max(0, sol - con))}</td><td class="c">${chip(est, canc ? 'Cancelada' : fmtNum(pct) + ' %')}</td></tr>`;
+  }).join('');
+  const total = `<tr class="tot"><td colspan="4">Total</td><td class="c">${fmtNum(m.rqSol)}</td><td class="c">${fmtNum(m.rqCon)}</td><td class="c">${fmtNum(m.rqPend)}</td><td class="c">${fmtNum(m.pctSel)} %</td></tr>`;
+
+  const porRq = (rqs || []).map((r, i) => {
+    const sol = Number(r.solicitadas) || 0; const con = Number(r.contratadas) || 0;
+    const pct = sol > 0 ? Math.round(con / sol * 100) : 0;
+    const canc = String(r.nota || '').toLowerCase().includes('cancel');
+    return { label: [r.rq, r.cargo].filter(Boolean).join(' · ') || 'Requerimiento ' + (i + 1), value: pct, color: canc ? COLOR.neutro : pct >= 90 ? COLOR.ok : pct >= 50 ? COLOR.warn : COLOR.bad, nota: `${con} de ${sol} vacantes${canc ? ' (cancelada)' : ''}` };
+  });
+  const don = [{ label: 'Contratadas', value: m.rqCon, color: COLOR.ok }, { label: 'Pendientes', value: m.rqPend, color: '#D5DDD8' }];
+
+  return `<div id="t-sel" class="tab" role="tabpanel">${modHead('seleccion', 'Selección y contratación', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Vacantes solicitadas', valor: fmtNum(m.rqSol), sub: 'Lo que pidió la empresa' },
+      { nombre: 'Contratadas', valor: fmtNum(m.rqCon), estado: m.hayRq ? e : 'info', sub: m.hayRq ? `${fmtNum(m.pctSel)} % de efectividad` : '', delta: deltaDe(ind, 'seleccion') },
+      { nombre: 'Pendientes', valor: fmtNum(m.rqPend), estado: m.rqPend > 0 ? 'warn' : m.hayRq ? 'ok' : 'info', sub: m.rqPend > 0 ? 'Por cubrir' : 'Sin vacantes pendientes' },
+    )
+    + (m.hayRq ? `<div class="grid2">${card('Efectividad frente a la meta', `<div class="centro">${gauge(m.pctSel, { ok: METAS.seleccion.ok, warn: METAS.seleccion.warn, masEsMejor: true, etiqueta: 'Efectividad de selección' })}<p class="nota">Verde: 80 % o más · Ámbar: 50 % a 79 % · Rojo: menos de 50 %</p></div>`)}`
+      + card('Vacantes: cubiertas y pendientes', `<div class="fila">${donut(don, { centro: fmtNum(m.pctSel) + ' %', sub: 'cubierto' })}${leyenda(don)}</div>`) + '</div>'
+      + card('Cumplimiento por requerimiento', barras(porRq, { max: 100, meta: 80, sufijo: ' %', metaTexto: 'Meta 80 %' }), { sub: 'Cada barra es un requerimiento (RQ): qué porcentaje de sus vacantes ya se cubrió.' })
+      + card('Detalle de requerimientos', `<div class="tw"><table><thead><tr><th>RQ</th><th>Agencia</th><th>Ciudad</th><th>Cargo</th><th class="c">Solicitadas</th><th class="c">Contratadas</th><th class="c">Pendientes</th><th class="c">Cumplimiento</th></tr></thead><tbody>${filas}${total}</tbody></table></div>`)
+      : '')
+    + explicacion('seleccion') + '</div>';
+}
+
+function secHeadcount(c) {
+  const { m, ind, prev } = c;
+  const l = m.sdHc ? lectura('info', 'Este mes no se registró el movimiento de personal.') : m.neto > 0 ? lectura('ok', `La planta creció en ${plural(m.neto, 'persona')}: pasó de ${fmtNum(m.hcInicio)} a ${fmtNum(m.hcCierre)} personas activas.`)
+    : m.neto === 0 ? lectura('ok', `La planta se mantuvo estable en ${fmtNum(m.hcCierre)} personas activas.`)
+      : lectura('warn', `La planta bajó en ${plural(-m.neto, 'persona')}: pasó de ${fmtNum(m.hcInicio)} a ${fmtNum(m.hcCierre)} personas activas.`);
+  const cmp = prev ? card(`Frente a ${nombrePeriodo(prev.per)}`, comparar([
+    { nombre: 'Activos al cierre', antes: prev.hcCierre, ahora: m.hcCierre },
+    { nombre: 'Ingresos', antes: prev.hcIng, ahora: m.hcIng },
+    { nombre: 'Retiros', antes: prev.hcRet, ahora: m.hcRet },
+  ]) + `<div class="cmp-ley"><span><i style="background:#B8C4BC"></i>${esc(nombrePeriodo(prev.per))}</span><span><i style="background:var(--vd)"></i>${esc(c.mes)}</span></div>`) : '';
+  return `<div id="t-hc" class="tab" role="tabpanel">${modHead('headcount', 'Administración de personal', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Al inicio del mes', valor: fmtNum(m.hcInicio), unidad: 'personas' },
+      { nombre: 'Ingresos', valor: '+' + fmtNum(m.hcIng), unidad: 'personas', estado: 'info' },
+      { nombre: 'Retiros', valor: '−' + fmtNum(m.hcRet), unidad: 'personas', estado: 'info' },
+      { nombre: 'Al cierre', valor: fmtNum(m.hcCierre), unidad: 'personas', estado: m.neto >= 0 ? 'ok' : 'warn', sub: `${m.neto >= 0 ? '+' : '−'}${fmtNum(Math.abs(m.neto))} frente al inicio`, delta: deltaDe(ind, 'headcount') },
+    )
+    + card('Movimiento del mes', `<div class="centro">${cascada({ inicio: m.hcInicio, ingresos: m.hcIng, retiros: m.hcRet, cierre: m.hcCierre })}<p class="nota">Se lee de izquierda a derecha: las personas del inicio, más las que ingresaron, menos las que se retiraron, igual a las que quedaron.</p></div>`)
+    + cmp + explicacion('headcount') + '</div>';
+}
+
+function secRotacion(c) {
+  const { m, motivos, ind, d } = c;
+  const e = estadoDe(ind, 'rotacion')?.estado || 'info';
+  const lista = (motivos || []).filter(x => x.motivo && Number(x.cantidad) > 0).map(x => ({ ...x, cant: Number(x.cantidad), tipo: clasificarMotivo(x.motivo) }));
+  let l;
+  if (m.sdHc && m.totMot === 0) l = lectura('info', 'Este mes no se registraron retiros ni el movimiento de personal.');
+  else if (m.totMot === 0) l = lectura('ok', 'No hubo retiros en el mes: la retención fue total.');
+  else if (e === 'ok') l = lectura('ok', `Hubo ${plural(m.totMot, 'retiro')} (${fmtDec(m.tasaRot)} % del personal): dentro del nivel saludable de 3 %.`);
+  else if (e === 'warn') l = lectura('warn', `Hubo ${plural(m.totMot, 'retiro')} (${fmtDec(m.tasaRot)} % del personal): supera el 3 % saludable y conviene revisarlo.`);
+  else l = lectura('bad', `Hubo ${plural(m.totMot, 'retiro')} (${fmtDec(m.tasaRot)} % del personal): es una rotación alta, por encima del 6 %.`);
+
+  const porMotivo = lista.map(x => ({ label: x.motivo, value: x.cant, color: TIPO[x.tipo].color, nota: `${fmtNum(Math.round(x.cant / m.totMot * 100))} % de los retiros · ${TIPO[x.tipo].nombre}` }));
+  const porTipo = Object.keys(TIPO).map(k => ({ label: TIPO[k].nombre, value: m.porTipo[k], color: TIPO[k].color }));
+  const filas = lista.map(x => `<tr><td>${esc(x.motivo)}</td><td class="c">${fmtNum(x.cant)}</td><td class="c">${fmtNum(Math.round(x.cant / m.totMot * 100))} %</td><td>${chip(TIPO[x.tipo].estado, TIPO[x.tipo].nombre)}</td></tr>`).join('')
+    + `<tr class="tot"><td>Total</td><td class="c">${fmtNum(m.totMot)}</td><td class="c">100 %</td><td></td></tr>`;
+  const tipos = '<ul class="leyenda" style="margin-top:12px">' + Object.keys(TIPO).filter(k => m.porTipo[k] > 0).map(k => `<li style="grid-template-columns:14px 1fr"><span class="sw" style="background:${TIPO[k].color}"></span><span><strong>${TIPO[k].nombre}:</strong> ${esc(TIPO[k].desc)}</span></li>`).join('') + '</ul>';
+
+  return `<div id="t-rot" class="tab" role="tabpanel">${modHead('rotacion', 'Rotación de personal', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Retiros del mes', valor: fmtNum(m.totMot), unidad: m.totMot === 1 ? 'persona' : 'personas', sub: `Sobre ${fmtNum(m.hcCierre)} personas activas` },
+      { nombre: 'Tasa de rotación', valor: fmtDec(m.tasaRot) + ' %', estado: e, meta: 'Saludable: hasta 3 %', delta: deltaDe(ind, 'rotacion') },
+      { nombre: 'Retiros evitables', valor: fmtNum(m.porTipo.evitable), estado: m.porTipo.evitable > 0 ? 'warn' : 'ok', sub: 'Los que se pueden prevenir' },
+    )
+    + (m.totMot > 0
+      ? `<div class="grid2">${card('Rotación frente a la meta', `<div class="centro">${gauge(m.tasaRot, { max: 10, ok: METAS.rotacion.ok, warn: METAS.rotacion.warn, masEsMejor: false, decimales: 1, etiqueta: 'Tasa de rotación' })}<p class="nota">Verde: hasta 3 % · Ámbar: 3 % a 6 % · Rojo: más de 6 %</p></div>`)}`
+        + card('¿De qué tipo fueron los retiros?', `<div class="fila">${donut(porTipo, { centro: fmtNum(m.totMot), sub: m.totMot === 1 ? 'retiro' : 'retiros' })}${leyenda(porTipo)}</div>${tipos}`) + '</div>'
+        + card('Motivos de retiro', barras(porMotivo, { sufijo: '' }))
+        + card('Detalle', `<div class="tw"><table><thead><tr><th>Motivo</th><th class="c">Cantidad</th><th class="c">Porcentaje</th><th>Tipo</th></tr></thead><tbody>${filas}</tbody></table></div>`)
+      : card('Retiros del mes', '<p class="vacio">No se registraron retiros este mes.</p>'))
+    + (hay(d.rotObs) ? card('Observaciones', `<p>${parrafo(d.rotObs)}</p>`) : '')
+    + explicacion('rotacion') + '</div>';
+}
+
+/** Subsección «Tasa de accidentalidad por sede» (módulo sst_tasa). */
+function bloqueTasa(c) {
+  const { m, ind } = c;
+  const e = estadoDe(ind, 'sst_tasa');
+  if (!m.hayTasa) return lectura('info', 'Este mes no se registró la tasa de accidentalidad (faltan los accidentes y las personas expuestas por sede).');
+  const est = e?.estado || 'info';
+  const l = est === 'ok' ? lectura('ok', `La tasa de accidentalidad fue de ${fmtDec(m.tasaAT)} %: está dentro de la meta de 1 %.`)
+    : lectura(est, `La tasa de accidentalidad fue de ${fmtDec(m.tasaAT)} %: supera la meta de 1 %. Conviene revisar dónde ocurrieron los accidentes.`);
+  const conTasa = m.sedes.filter(x => x.tasa != null);
+  const colorDe = (t) => (t <= METAS.tasaAT.ok ? COLOR.ok : t <= METAS.tasaAT.warn ? COLOR.warn : COLOR.bad);
+  const grafica = conTasa.length ? card('Tasa por sede', barras(conTasa.map(x => ({ label: x.sede, value: x.tasa, color: colorDe(x.tasa), nota: `${fmtNum(x.at)} ${x.at === 1 ? 'accidente' : 'accidentes'} · ${fmtNum(x.expuestos)} personas expuestas` })), { meta: METAS.tasaAT.ok, metaTexto: 'Meta 1 %', sufijo: ' %', fmt: fmtDec, max: Math.max(METAS.tasaAT.warn, ...conTasa.map(x => x.tasa)) }),
+    { sub: 'Mientras más corta la barra, mejor. La marca vertical es la meta (1 %).' }) : '';
+  const filas = m.sedes.map(x => `<tr><td><strong>${esc(x.sede)}</strong></td><td class="c">${fmtNum(x.at)}</td><td class="c">${fmtNum(x.expuestos)}</td><td class="c">${x.tasa == null ? '—' : fmtDec(x.tasa) + ' %'}</td><td>${x.tasa == null ? chip('info', 'Sin datos') : chip(estadoDeTasa(x.tasa))}</td></tr>`).join('');
+  const tabla = m.sedes.length ? card('Detalle por sede', `<div class="tw"><table><thead><tr><th>Sede</th><th class="c">Accidentes</th><th class="c">Personas expuestas</th><th class="c">Tasa</th><th>Estado</th></tr></thead><tbody>${filas}</tbody></table></div>`) : '';
+  const nota = m.tasaOrigen === 'headcount' ? '<p class="nota">No se registraron las personas expuestas por sede: la tasa se calculó con el personal activo al cierre del mes.</p>' : '';
+  return `<div class="sub-mod"><h3 class="sub-t">📈 Tasa de accidentalidad</h3>${l}`
+    + kpis({ nombre: 'Tasa de accidentalidad', valor: fmtDec(m.tasaAT) + ' %', estado: est, meta: 'Meta: hasta 1 %', delta: e?.delta || null, sub: m.sedes.length > 1 ? `${fmtNum(m.sedes.length)} sedes reportadas` : 'Accidentes sobre personas expuestas' })
+    + grafica + tabla + nota + explicacion('sst_tasa') + '</div>';
+}
+const estadoDeTasa = (t) => (t <= METAS.tasaAT.ok ? 'ok' : t <= METAS.tasaAT.warn ? 'warn' : 'bad');
+
+/** Subsección «Severidad de los accidentes» (módulo sst_severidad). */
+function bloqueSeveridad(c) {
+  const { m, ind } = c;
+  const e = estadoDe(ind, 'sst_severidad');
+  const l = m.sevDias === 0 ? lectura('ok', 'Ningún accidente generó días perdidos de trabajo este mes.')
+    : lectura('warn', `Los accidentes dejaron ${fmtNum(m.sevDias)} ${m.sevDias === 1 ? 'día perdido' : 'días perdidos'} de trabajo${m.sevConDias > 0 ? `, en ${plural(m.sevConDias, 'accidente con incapacidad', 'accidentes con incapacidad')}` : ''}.`);
+  return `<div class="sub-mod"><h3 class="sub-t">⚠️ Severidad de los accidentes</h3>${l}`
+    + kpis(
+      { nombre: 'Días perdidos por AT', valor: fmtNum(m.sevDias), estado: e?.estado || 'info', meta: 'Meta: cero', delta: e?.delta || null, sub: 'Suma de días de incapacidad' },
+      m.sevConDias > 0 ? { nombre: 'Accidentes con incapacidad', valor: fmtNum(m.sevConDias), sub: `De ${plural(m.at, 'accidente del mes', 'accidentes del mes')}` } : null,
+      m.sevConDias > 0 ? { nombre: 'Promedio por accidente', valor: fmtDec(m.sevProm), unidad: 'días', sub: 'Días perdidos ÷ accidentes con incapacidad' } : null,
+    )
+    + explicacion('sst_severidad') + '</div>';
+}
+
+/** Subsección «Investigación de los accidentes» (módulo sst_investigacion). */
+function bloqueInvestigacion(c) {
+  const { m, ind } = c;
+  const e = estadoDe(ind, 'sst_investigacion');
+  if (m.invTotal === 0) {
+    return `<div class="sub-mod"><h3 class="sub-t">🔍 Investigación de los accidentes</h3>`
+      + (m.at === 0 ? lectura('ok', 'No hubo accidentes que investigar este mes.') : lectura('info', 'Este mes no se registró cuántos accidentes se investigaron.'))
+      + explicacion('sst_investigacion') + '</div>';
+  }
+  const est = e?.estado || 'info';
+  const pend = Math.max(0, m.invTotal - m.invHechos);
+  const l = pend === 0 ? lectura('ok', `Se investigaron los ${plural(m.invTotal, 'accidente', 'accidentes')} del mes (${fmtNum(Math.round(m.invPct))} %).`)
+    : lectura(est, `Se investigaron ${fmtNum(m.invHechos)} de ${plural(m.invTotal, 'accidente', 'accidentes')} (${fmtNum(Math.round(m.invPct))} %). Faltan ${fmtNum(pend)} por cerrar.`);
+  return `<div class="sub-mod"><h3 class="sub-t">🔍 Investigación de los accidentes</h3>${l}`
+    + kpis(
+      { nombre: 'Cumplimiento de la investigación', valor: fmtNum(Math.round(m.invPct)) + ' %', estado: est, meta: 'Meta: 100 %', delta: e?.delta || null, sub: `${fmtNum(m.invHechos)} de ${fmtNum(m.invTotal)} investigados` },
+      m.invTiempo > 0 ? { nombre: 'Dentro del plazo (15 días)', valor: fmtNum(m.invTiempo), sub: `${fmtNum(Math.round(m.invTiempoPct))} % de los accidentes` } : null,
+      { nombre: 'Pendientes', valor: fmtNum(pend), estado: pend > 0 ? 'warn' : 'ok', sub: pend > 0 ? 'Por investigar' : 'Todo al día' },
+    )
+    + card('Avance de la investigación', barras([
+      { label: 'Accidentes por investigar', value: m.invTotal, color: '#607D8B' },
+      { label: 'Investigados', value: m.invHechos, color: COLOR.ok },
+      m.invTiempo > 0 ? { label: 'A tiempo (15 días)', value: m.invTiempo, color: COLOR.info } : null,
+    ].filter(Boolean), { max: Math.max(m.invTotal, 1) }))
+    + explicacion('sst_investigacion') + '</div>';
+}
+
+function bloqueGeneralSST(c) {
+  const { m, ind, casos, d } = c;
+  const l = m.at === 0 ? lectura('ok', 'No hubo accidentes de trabajo en el mes.')
+    : lectura(m.at === 1 ? 'warn' : 'bad', `Hubo ${plural(m.at, 'accidente de trabajo', 'accidentes de trabajo')} en el mes. Conviene revisar qué lo causó y cómo evitar que se repita.`);
+  const eventos = [
+    { label: 'Accidentes de trabajo (AT)', value: m.at, color: m.at > 0 ? COLOR.bad : COLOR.ok },
+    { label: 'Origen común o tránsito (OC)', value: m.oc, color: COLOR.warn },
+    { label: 'Licencias de maternidad', value: m.mat, color: COLOR.info },
+    { label: 'Casos médicos en seguimiento', value: m.casos, color: '#607D8B' },
+  ];
+  const filas = (casos || []).map((x, i) => {
+    const origen = x.origen === 'AT laboral' ? 'bad' : x.origen === 'Lic. maternidad' ? 'info' : 'gris';
+    const est = String(x.estado || '').toLowerCase();
+    const estado = est.includes('alta') || est.includes('labor') ? 'ok' : est.includes('incap') ? 'bad' : 'warn';
+    const tg = x.seguimiento ? `<button type="button" class="tg" data-row="cs${i}" aria-expanded="false" aria-label="Ver seguimiento del caso ${i + 1}">+</button>` : '';
+    return `<tr><td>${i + 1}</td><td><strong>${esc(x.nombre || '—')}</strong></td><td>${esc(x.identificacion || '—')}</td><td>${esc(x.cie10 || '—')}</td><td>${esc(x.ciudad || '—')}</td><td>${chip(origen, x.origen || '—')}</td><td>${chip(estado, x.estado || '—')}</td><td>${tg}</td></tr>`
+      + (x.seguimiento ? `<tr id="cs${i}" class="seg-row"><td colspan="8"><strong>Seguimiento:</strong> ${parrafo(x.seguimiento)}</td></tr>` : '');
+  }).join('');
+  const conTasaPropia = moduloActivo(c.active, 'sst_tasa');
+  return `<div class="sub-mod"><h3 class="sub-t">🛡️ Resumen de seguridad y salud</h3>${l}`
+    + kpis(
+      { nombre: 'Accidentes de trabajo', valor: fmtNum(m.at), estado: m.at === 0 ? 'ok' : m.at === 1 ? 'warn' : 'bad', meta: 'Meta: cero', delta: deltaDe(ind, 'sst') },
+      !conTasaPropia && m.hayTasa ? { nombre: 'Tasa de accidentalidad', valor: fmtDec(m.tasaAT) + ' %', sub: 'Accidentes sobre personas activas' } : null,
+      { nombre: 'Origen común o tránsito', valor: fmtNum(m.oc), sub: 'Eventos que no son del trabajo' },
+      { nombre: 'Licencias de maternidad', valor: fmtNum(m.mat) },
+      { nombre: 'Días perdidos (E.G.)', valor: fmtNum(m.eg), sub: 'Por enfermedad general' },
+      { nombre: 'Cobertura ARL', valor: fmtNum(m.arl) + ' %', sub: 'Personas afiliadas a la ARL' },
+      { nombre: 'Inducciones SST', valor: fmtNum(m.ind), sub: 'Personas inducidas en el mes' },
+      { nombre: 'Casos médicos', valor: fmtNum(m.casos), estado: m.casos > 0 ? 'warn' : 'ok', sub: m.casos ? 'En seguimiento' : 'Sin casos en seguimiento' },
+    )
+    + card('Eventos del mes', barras(eventos), { sub: 'Cuántos eventos hubo de cada tipo. Pasa el mouse o toca una barra para ver su explicación.' })
+    + (filas ? card('Casos médicos en seguimiento', `<div class="tw"><table><thead><tr><th>#</th><th>Persona</th><th>Identificación</th><th>Diagnóstico (CIE-10)</th><th>Ciudad</th><th>Origen</th><th>Estado</th><th><span class="sr">Ver seguimiento</span></th></tr></thead><tbody>${filas}</tbody></table></div><p class="nota no-print" style="margin-top:8px">Toca el botón + de cada fila para leer el seguimiento del caso.</p>`) : '')
+    + (hay(d.sstObs) ? card('Observaciones de SST', `<p>${parrafo(d.sstObs)}</p>`) : '')
+    + explicacion('sst') + '</div>';
+}
+
+/** Pestaña de seguridad y salud: un bloque por cada módulo de SST que se reporta a este cliente. */
+function secSST(c) {
+  const on = (id) => moduloActivo(c.active, id);
+  return `<div id="t-sst" class="tab" role="tabpanel">${modHead('sst', 'Seguridad y salud en el trabajo', c.mes, c.cli)}`
+    + (on('sst') ? bloqueGeneralSST(c) : '')
+    + (on('sst_tasa') ? bloqueTasa(c) : '')
+    + (on('sst_severidad') ? bloqueSeveridad(c) : '')
+    + (on('sst_investigacion') ? bloqueInvestigacion(c) : '')
+    + '</div>';
+}
+
+function secNomina(c) {
+  const { m, ind, d } = c;
+  const l = m.nerr === 0 ? lectura('ok', m.nliq > 0 ? `La nómina se liquidó sin errores para ${plural(m.nliq, 'persona')}.` : 'No se reportaron errores en la nómina.')
+    : lectura('bad', `Se encontraron ${plural(m.nerr, 'error', 'errores')} en la liquidación de nómina. Hay que verificarlos y reprocesarlos.`);
+  const nov = [
+    { label: 'Incapacidades', value: m.ninc, color: COLOR.warn },
+    { label: 'Licencias', value: m.nlic, color: COLOR.info },
+    { label: 'Horas extras diurnas', value: m.nhed, color: COLOR.ok },
+    { label: 'Horas extras nocturnas', value: m.nhen, color: '#7B68EE' },
+  ];
+  return `<div id="t-nom" class="tab" role="tabpanel">${modHead('nomina', 'Nómina', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Personas liquidadas', valor: fmtNum(m.nliq) },
+      { nombre: 'Errores de nómina', valor: fmtNum(m.nerr), estado: m.nerr === 0 ? 'ok' : 'bad', meta: 'Meta: cero', delta: deltaDe(ind, 'nomina') },
+      { nombre: 'Incapacidades', valor: fmtNum(m.ninc) },
+      { nombre: 'Licencias', valor: fmtNum(m.nlic) },
+    )
+    + card('Novedades del mes', barras(nov), { sub: 'Lo que movió la nómina este mes además del salario base.' })
+    + (hay(d.nobs) ? card('Observaciones', `<p>${parrafo(d.nobs)}</p>`) : '')
+    + explicacion('nomina') + '</div>';
+}
+
+function secAusentismo(c) {
+  const { m, ind, extras } = c;
+  const aus = extras.ausentismo || c.d.ausentismo || {};
+  const e = estadoDe(ind, 'ausentismo')?.estado || 'info';
+  const l = e === 'ok' ? lectura('ok', `El ausentismo fue de ${fmtDec(m.ausTasa)} %: dentro de la meta de 2 %.`)
+    : e === 'warn' ? lectura('warn', `El ausentismo fue de ${fmtDec(m.ausTasa)} %: supera la meta de 2 % y conviene vigilarlo.`)
+      : lectura('bad', `El ausentismo fue de ${fmtDec(m.ausTasa)} %: es alto, por encima del 4 %.`);
+  return `<div id="t-aus" class="tab" role="tabpanel">${modHead('ausentismo', 'Ausentismo', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Tasa de ausentismo', valor: fmtDec(m.ausTasa) + ' %', estado: e, meta: 'Meta: hasta 2 %', delta: deltaDe(ind, 'ausentismo') },
+      { nombre: 'Horas de ausencia', valor: fmtNum(m.ausHoras) },
+      { nombre: 'Eventos', valor: fmtNum(m.ausEventos), sub: 'Veces que alguien se ausentó' },
+      { nombre: 'Días perdidos', valor: fmtNum(m.ausDias) },
+    )
+    + `<div class="grid2">${card('Ausentismo frente a la meta', `<div class="centro">${gauge(m.ausTasa, { max: 8, ok: METAS.ausentismo.ok, warn: METAS.ausentismo.warn, masEsMejor: false, decimales: 1, etiqueta: 'Tasa de ausentismo' })}<p class="nota">Verde: hasta 2 % · Ámbar: 2 % a 4 % · Rojo: más de 4 %</p></div>`)}`
+    + card('Principales causas', hay(aus.causas) ? `<p>${parrafo(aus.causas)}</p>` : '<p class="vacio">No se registraron las causas de este mes.</p>') + '</div>'
+    + (hay(aus.obs) ? `<div class="lectura warn"><span class="li" aria-hidden="true">→</span><div><strong>Plan de acción</strong>${parrafo(aus.obs)}</div></div>` : '')
+    + explicacion('ausentismo') + '</div>';
+}
+
+function secCapacitacion(c) {
+  const { m, extras } = c;
+  const cap = extras.capacitacion || c.d.capacitacion || {};
+  const temas = (cap.temas || []).filter(t => hay(t.tema));
+  const l = m.capHoras > 0 ? lectura('ok', `Se dieron ${fmtNum(m.capHoras)} horas de formación a ${plural(m.capPersonas, 'persona')}${m.capCobertura ? ` (${fmtNum(m.capCobertura)} % del personal)` : ''}.`)
+    : lectura('info', 'Este mes no se registraron horas de formación.');
+  const cob = Math.max(0, Math.min(100, m.capCobertura));
+  const don = [{ label: 'Con formación', value: cob, color: COLOR.ok }, { label: 'Sin formación este mes', value: 100 - cob, color: '#D5DDD8' }];
+  const filas = temas.map(t => `<tr><td>${esc(t.tema)}</td><td class="c">${fmtNum(t.asistentes ?? 0)}</td><td class="c">${fmtNum(t.horas ?? 0)}</td></tr>`).join('');
+  return `<div id="t-cap" class="tab" role="tabpanel">${modHead('capacitacion', 'Capacitación y formación', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Horas de formación', valor: fmtNum(m.capHoras), unidad: 'horas', delta: deltaDe(c.ind, 'capacitacion') },
+      { nombre: 'Personas capacitadas', valor: fmtNum(m.capPersonas) },
+      { nombre: 'Cobertura', valor: fmtNum(m.capCobertura) + ' %', sub: 'Del total del personal' },
+    )
+    + (m.capCobertura > 0 || temas.length ? `<div class="grid2">${card('Cobertura de la formación', `<div class="fila">${donut(don, { centro: fmtNum(cob) + ' %', sub: 'del personal' })}${leyenda(don.map(x => ({ ...x, value: x.value })))}</div>`)}`
+      + card('Horas por tema', temas.length ? barras(temas.map(t => ({ label: t.tema, value: Number(t.horas) || 0, nota: `${fmtNum(t.asistentes ?? 0)} asistentes`, color: COLOR.ok })), { sufijo: ' h' }) : '<p class="vacio">No se registraron temas.</p>') + '</div>' : '')
+    + (filas ? card('Temas impartidos', `<div class="tw"><table><thead><tr><th>Tema</th><th class="c">Asistentes</th><th class="c">Horas</th></tr></thead><tbody>${filas}</tbody></table></div>`) : '')
+    + (hay(cap.obs) ? card('Observaciones', `<p>${parrafo(cap.obs)}</p>`) : '')
+    + explicacion('capacitacion') + '</div>';
+}
+
+function secClima(c) {
+  const { m, ind, extras } = c;
+  const clima = extras.clima || c.d.clima || {};
+  const e = estadoDe(ind, 'clima')?.estado || 'info';
+  const l = m.sdClima ? lectura('info', 'Este mes no se registraron los resultados de la encuesta de clima.') : e === 'ok' ? lectura('ok', `La satisfacción del personal es de ${fmtNum(m.satisfaccion)} %: supera la meta de 85 %.`)
+    : e === 'warn' ? lectura('warn', `La satisfacción del personal es de ${fmtNum(m.satisfaccion)} %: está cerca de la meta de 85 %, pero todavía no la alcanza.`)
+      : lectura('bad', `La satisfacción del personal es de ${fmtNum(m.satisfaccion)} %: está bastante por debajo de la meta de 85 %.`);
+  const enpsTxt = m.enps >= 30 ? ['ok', 'Muy bueno'] : m.enps >= 0 ? ['info', 'Positivo'] : ['bad', 'Por mejorar'];
+  return `<div id="t-clima" class="tab" role="tabpanel">${modHead('clima', 'Clima laboral y bienestar', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Satisfacción', valor: fmtNum(m.satisfaccion) + ' %', estado: e, meta: 'Meta: 85 % o más', delta: deltaDe(ind, 'clima') },
+      { nombre: 'eNPS', valor: fmtNum(m.enps), estado: enpsTxt[0] === 'info' ? 'info' : enpsTxt[0], sub: `Lectura: ${enpsTxt[1].toLowerCase()} (va de −100 a +100)` },
+      { nombre: 'Participación', valor: fmtNum(m.participacion) + ' %', sub: 'De las personas que contestaron la encuesta' },
+      { nombre: 'Actividades de bienestar', valor: fmtNum(m.actividades) },
+    )
+    + (m.sdClima ? '' : card('Satisfacción frente a la meta', `<div class="centro">${gauge(m.satisfaccion, { ok: METAS.satisfaccion.ok, warn: METAS.satisfaccion.warn, masEsMejor: true, etiqueta: 'Satisfacción del personal' })}<p class="nota">Verde: 85 % o más · Ámbar: 70 % a 84 % · Rojo: menos de 70 %</p></div>`))
+    + (hay(clima.encuesta) ? card('La voz del personal', `<p style="font-style:italic">“${parrafo(clima.encuesta)}”</p>`) : '')
+    + (hay(clima.plan) ? `<div class="lectura"><span class="li" aria-hidden="true">→</span><div><strong>Plan de mejora</strong>${parrafo(clima.plan)}</div></div>` : '')
+    + explicacion('clima') + '</div>';
+}
+
+function secFacturacion(c) {
+  const { m, extras } = c;
+  const fac = extras.facturacion || c.d.facturacion || {};
+  const e = m.facEstado === 'Al día' ? 'ok' : m.facEstado === 'En mora' ? 'bad' : 'warn';
+  const l = m.sdFac ? lectura('info', 'Este mes no se registró información de facturación.') : e === 'ok' ? lectura('ok', 'La facturación está al día: no hay pagos vencidos.')
+    : e === 'bad' ? lectura('bad', 'La facturación figura en mora: hay pagos vencidos por regularizar.')
+      : lectura('warn', `La facturación figura como “${m.facEstado}”.`);
+  return `<div id="t-fac" class="tab" role="tabpanel">${modHead('facturacion', 'Facturación y financiero', c.mes, c.cli)}${l}`
+    + kpis(
+      { nombre: 'Valor facturado', valor: fmtMoney(m.facValor) },
+      { nombre: 'Costo de nómina', valor: fmtMoney(m.facCosto) },
+      { nombre: 'Margen', valor: fmtNum(m.facMargen) + ' %' },
+      { nombre: 'Estado de pagos', valor: m.facEstado, estado: e },
+      { nombre: 'Días de cartera', valor: fmtNum(m.facCartera), unidad: 'días', sub: 'Tiempo promedio de cobro' },
+    )
+    + card('Cumplimiento de pagos', barras([{ label: 'Pagos cumplidos', value: Math.max(0, Math.min(100, m.facCumplimiento)), color: e === 'bad' ? COLOR.bad : COLOR.ok }], { max: 100, sufijo: ' %' }))
+    + (hay(fac.obs) ? card('Observaciones financieras', `<p>${parrafo(fac.obs)}</p>`) : '')
+    + explicacion('facturacion') + '</div>';
+}
+
+function secFotos(c) {
+  const fotos = c.fotos || {};
+  const items = [];
+  for (let i = 0; i < 9; i++) if (fotos[i]) items.push(`<figure class="foto"><img src="${esc(fotos[i])}" alt="${esc(FOTOLABELS[i])}" loading="lazy"><figcaption>${esc(FOTOLABELS[i])}</figcaption></figure>`);
+  return `<div id="t-act" class="tab" role="tabpanel"><header class="mod-hd"><div class="k">${esc(c.mes)} · ${esc(c.cli)}</div><h2>Actividades del mes</h2><p class="q">¿Qué se hizo en el sitio de trabajo?</p></header>`
+    + (items.length ? card('Registro fotográfico', `<div class="fotos">${items.join('')}</div><p class="nota no-print" style="margin-top:8px">Toca una foto para verla en grande.</p>`) : card('Registro fotográfico', '<p class="vacio">Este mes no se cargaron fotos.</p>'))
+    + '</div>';
+}
+
+/* ───────────────────────── Resumen ───────────────────────── */
+
+function secResumen(c) {
+  const { m, ind, msgs, prev, active } = c;
+  const cnt = contarSemaforos(ind);
+  const evaluados = cnt.ok + cnt.warn + cnt.bad;
+  const mesPrev = prev ? nombrePeriodo(prev.per) : '';
+  let tono = 'ok'; let titular; let sub;
+  if (m.vacio) { tono = 'info'; titular = 'Todavía no hay cifras cargadas para este mes'; sub = 'Cuando el equipo registre la información, aquí verás el resumen con sus semáforos.'; }
+  else if (!evaluados) { titular = 'Resumen del mes'; sub = 'Estas son las cifras del período.'; }
+  else if (cnt.bad > 0) { tono = 'bad'; titular = `${plural(cnt.bad, 'indicador necesita', 'indicadores necesitan')} atención este mes`; sub = `${fmtNum(cnt.ok)} de ${fmtNum(evaluados)} indicadores cumplen su meta.`; }
+  else if (cnt.warn > 0) { tono = 'warn'; titular = `Buen mes, con ${plural(cnt.warn, 'punto', 'puntos')} para vigilar`; sub = `${fmtNum(cnt.ok)} de ${fmtNum(evaluados)} indicadores cumplen su meta.`; }
+  else { titular = 'Mes sólido: todos los indicadores están en meta'; sub = `${fmtNum(cnt.ok)} de ${fmtNum(evaluados)} indicadores cumplen su meta.`; }
+  if (prev) {
+    const mej = ind.filter(i => i.delta?.tono === 'ok').length; const peo = ind.filter(i => i.delta?.tono === 'bad').length;
+    sub += ` Frente a ${mesPrev}: ${plural(mej, 'mejoró', 'mejoraron')} y ${plural(peo, 'empeoró', 'empeoraron')}.`;
+  }
+  const sem = (k, texto) => `<div class="sem ${k}${cnt[k] ? '' : ' cero'}"><b>${fmtNum(cnt[k])}</b><span>${CHIP[k][0]} ${texto}</span></div>`;
+
+  const tarjetas = ind.map(i => {
+    const delta = i.delta ? `<div class="delta ${i.delta.tono}"><span aria-hidden="true">${i.delta.flecha}</span>${esc(i.delta.texto)}</div>` : '';
+    return `<article class="kpi ${i.estado}"><div class="kpi-hd"><span class="kpi-nom"><span aria-hidden="true">${i.icono}</span>${esc(i.nombre)}</span></div>`
+      + `<div class="kpi-val${String(i.texto).length > 10 ? ' largo' : ''}">${esc(i.texto)}${i.unidad && i.unidad !== 'pts' ? `<small>${esc(i.unidad)}</small>` : ''}</div>`
+      + `<div>${chip(i.estado)}</div>`
+      + (i.meta ? `<div class="kpi-meta">${esc(i.meta)}</div>` : '')
+      + `<div class="kpi-sub">${esc(i.sub)}</div>${delta}`
+      + `<div class="kpi-ex" id="ex-${i.id}">${esc(i.explica)}</div>`
+      + `<div class="kpi-ac"><button type="button" class="lnk info-btn" aria-expanded="false" aria-controls="ex-${i.id}">ⓘ ¿Qué es?</button><button type="button" class="lnk" data-go="${i.tab}">Ver detalle →</button></div></article>`;
+  }).join('');
+
+  const lista = (arr, vacio) => arr.length ? '<ul>' + arr.map(t => `<li>${esc(t)}</li>`).join('') + '</ul>' : `<p class="vacio">${esc(vacio)}</p>`;
+  const trio = `<div class="trio"><section class="col"><h3><span aria-hidden="true">✔</span> Va bien</h3>${lista(msgs.bien, 'Este mes no hay logros que destacar.')}</section>`
+    + `<section class="col vig"><h3><span aria-hidden="true">!</span> Hay que vigilar</h3>${lista(msgs.vigilar, 'Nada preocupante este mes.')}</section>`
+    + `<section class="col sig"><h3><span aria-hidden="true">→</span> Lo que sigue</h3>${lista(msgs.sigue, '')}</section></div>`;
+
+  const filasMeta = [];
+  if (moduloActivo(active, 'seleccion') && m.hayRq) filasMeta.push({ nombre: 'Efectividad de selección', valor: m.pctSel, texto: fmtNum(m.pctSel) + ' %', ok: METAS.seleccion.ok, warn: METAS.seleccion.warn, masEsMejor: true, max: 100, tabId: 'sel' });
+  if (moduloActivo(active, 'rotacion') && !m.sdHc) filasMeta.push({ nombre: 'Rotación', valor: m.tasaRot, texto: fmtDec(m.tasaRot) + ' %', ok: METAS.rotacion.ok, warn: METAS.rotacion.warn, masEsMejor: false, max: 10, tabId: 'rot' });
+  if (moduloActivo(active, 'ausentismo')) filasMeta.push({ nombre: 'Ausentismo', valor: m.ausTasa, texto: fmtDec(m.ausTasa) + ' %', ok: METAS.ausentismo.ok, warn: METAS.ausentismo.warn, masEsMejor: false, max: 8, tabId: 'aus' });
+  if (moduloActivo(active, 'sst_tasa') && m.hayTasa) filasMeta.push({ nombre: 'Tasa de accidentalidad', valor: m.tasaAT, texto: fmtDec(m.tasaAT) + ' %', ok: METAS.tasaAT.ok, warn: METAS.tasaAT.warn, masEsMejor: false, max: 5, tabId: 'sst' });
+  if (moduloActivo(active, 'sst_investigacion') && m.invTotal > 0) filasMeta.push({ nombre: 'Investigación de accidentes', valor: m.invPct, texto: fmtNum(Math.round(m.invPct)) + ' %', ok: METAS.investigacion.ok, warn: METAS.investigacion.warn, masEsMejor: true, max: 100, tabId: 'sst' });
+  if (moduloActivo(active, 'clima') && !m.sdClima) filasMeta.push({ nombre: 'Satisfacción del personal', valor: m.satisfaccion, texto: fmtNum(m.satisfaccion) + ' %', ok: METAS.satisfaccion.ok, warn: METAS.satisfaccion.warn, masEsMejor: true, max: 100, tabId: 'clima' });
+  const metas = filasMeta.length ? card('¿Dónde estamos frente a la meta?', panelMetas(filasMeta)
+    + `<div class="metas-ley"><span><i style="background:${COLOR.ok}"></i>Zona de meta</span><span><i style="background:${COLOR.warn}"></i>Para vigilar</span><span><i style="background:${COLOR.bad}"></i>Zona crítica</span><span>● El círculo marca dónde está hoy</span></div>`,
+  { sub: 'Cada barra va de lo mejor a lo peor. Toca una fila para ver su detalle.' }) : '';
+
+  const comp = ind.filter(i => i.prev != null && Number.isFinite(i.prev));
+  const fmtV = (i, v) => (i.unidad === 'pts' ? fmtDec(v).replace(/,0$/, '') + ' %' : fmtNum(v));
+  const comparativo = prev
+    ? (comp.length ? card(`Comparativo con ${mesPrev}`, comparar(comp.map(i => ({ nombre: i.nombre, antes: i.prev, ahora: i.valor, txtAntes: fmtV(i, i.prev), txtAhora: fmtV(i, i.valor) })))
+      + `<div class="cmp-ley"><span><i style="background:#B8C4BC"></i>${esc(mesPrev)}</span><span><i style="background:var(--vd)"></i>${esc(c.mes)}</span></div>`, { sub: 'La barra gris es el mes anterior y la verde es este mes. Cada fila tiene su propia escala.' }) : '')
+    : card('Comparativo con el mes anterior', '<p class="vacio">Este es el primer informe de este cliente en la plataforma. Desde el próximo mes verás aquí cómo cambió cada indicador.</p>');
+
+  const leer = card('Cómo leer este informe', `<div class="leer"><div class="paso"><b><span class="num">1</span>Mira el semáforo</b>Cada indicador tiene un estado con color y símbolo, para que se entienda también sin ver los colores.</div>`
+    + `<div class="paso"><b><span class="num">2</span>Compáralo con la meta</b>Debajo de cada cifra está la meta. La flecha indica si mejoró o empeoró frente al mes anterior.</div>`
+    + `<div class="paso"><b><span class="num">3</span>Entra al detalle</b>Toca “Ver detalle” o usa las pestañas de arriba. Cada sección explica qué mide y cómo se calcula.</div></div>`
+    + `<div class="claves">${chip('ok')}${chip('warn')}${chip('bad')}${chip('info')}</div>`);
+
+  const gl = glosarioDe(active);
+  const glosario = gl.length ? `<details class="expl"><summary>📖 Glosario: las palabras de este informe</summary><dl class="expl-b gloss">${gl.map(g => `<div><dt>${esc(g.t)}</dt><dd>${esc(g.d)}</dd></div>`).join('')}</dl></details>` : '';
+
+  return `<div id="t-res" class="tab on" role="tabpanel">`
+    + `<section class="titular ${tono}"><div><div class="kk">Así cerró ${esc(c.mes)}</div><h2>${esc(titular)}</h2><p>${esc(sub)}</p></div>${evaluados && !m.vacio ? `<div class="semaforos">${sem('ok', 'En meta')}${sem('warn', 'Vigilar')}${sem('bad', 'Atención')}</div>` : ''}</section>`
+    + (ind.length ? `<div class="kpis">${tarjetas}</div>` : card('Sin módulos activos', '<p class="vacio">Este informe no tiene secciones activas.</p>'))
+    + trio + metas + comparativo + leer + glosario + '</div>';
+}
+
+/* ───────────────────────── Armado ───────────────────────── */
+
+const SECCIONES = [
+  { id: 'sel', mod: 'seleccion', label: 'Selección', ic: '🎯', fn: secSeleccion },
+  { id: 'hc', mod: 'headcount', label: 'Personal', ic: '👥', fn: secHeadcount },
+  { id: 'rot', mod: 'rotacion', label: 'Rotación', ic: '🔄', fn: secRotacion },
+  { id: 'sst', mod: 'sst', mods: ['sst', 'sst_tasa', 'sst_severidad', 'sst_investigacion'], label: 'Seguridad y salud', ic: '🛡️', fn: secSST },
+  { id: 'nom', mod: 'nomina', label: 'Nómina', ic: '💰', fn: secNomina },
+  { id: 'aus', mod: 'ausentismo', label: 'Ausentismo', ic: '⏰', fn: secAusentismo },
+  { id: 'cap', mod: 'capacitacion', label: 'Formación', ic: '🎓', fn: secCapacitacion },
+  { id: 'clima', mod: 'clima', label: 'Clima', ic: '😊', fn: secClima },
+  { id: 'fac', mod: 'facturacion', label: 'Facturación', ic: '🧾', fn: secFacturacion },
+  { id: 'act', mod: 'fotos', label: 'Actividades', ic: '📷', fn: secFotos },
+];
+
+/**
+ * Devuelve el HTML completo del informe.
+ * `extras`: { ausentismo, capacitacion, clima, facturacion, activeModules, previo }
+ * `extras.previo` (opcional) = { d, rqs, motivos, casos, extras, activeModules } del mes anterior del mismo cliente.
+ */
 export function buildInformeHTML(d, rqs, motivos, casos, fotos, extras = {}) {
-  // extras may be passed as 6th arg: { ausentismo, capacitacion, clima, facturacion, activeModules }
-  // backwards compatible: extras may be undefined, then activeModules = null (show all)
-  const active = extras?.activeModules || null;
-  const aus = extras?.ausentismo || d.ausentismo || {};
-  const cap = extras?.capacitacion || d.capacitacion || {};
-  const clima = extras?.clima || d.clima || {};
-  const fac = extras?.facturacion || d.facturacion || {};
+  const active = Array.isArray(extras?.activeModules) ? extras.activeModules : null;
+  const ex = extras || {};
+  const m = calcularMetricas(d, rqs, motivos, casos, ex);
 
-  const pts = d.per.split('-');
-  const mesStr = MESES_LARGOS[+pts[1] - 1] + ' ' + pts[0];
-
-  let rqRows = ''; let rqSol = 0, rqCon = 0;
-  (rqs || []).forEach(r => {
-    rqSol += +(r.solicitadas || 0); rqCon += +(r.contratadas || 0);
-    const pend = (r.solicitadas || 0) - (r.contratadas || 0);
-    const pct = r.solicitadas > 0 ? Math.round(r.contratadas / r.solicitadas * 100) : 0;
-    const isCan = (r.nota || '').toLowerCase().includes('cancel');
-    const bc = isCan ? 'bgr' : pct >= 90 ? 'bok' : pct >= 50 ? 'bwn' : 'bbd';
-    const bt = isCan ? 'Cancelada' : pct + '%';
-    rqRows += '<tr><td>' + (r.rq || '—') + '</td><td>' + (r.agencia || '—') + '</td><td>' + (r.ciudad || '—') + '</td><td>' + (r.cargo || '—') + '</td><td style="text-align:center">' + (r.solicitadas || 0) + '</td><td style="text-align:center">' + (r.contratadas || 0) + '</td><td style="text-align:center">' + pend + '</td><td style="text-align:center"><span class="b ' + bc + '">' + bt + '</span></td></tr>';
-  });
-  const pctSel = rqSol > 0 ? Math.round(rqCon / rqSol * 100) : 0;
-  const rqTotal = '<tr class="trt"><td colspan="4"><strong>Total</strong></td><td style="text-align:center"><strong>' + rqSol + '</strong></td><td style="text-align:center"><strong>' + rqCon + '</strong></td><td style="text-align:center"><strong>' + (rqSol - rqCon) + '</strong></td><td style="text-align:center"><span class="b ' + (pctSel >= 80 ? 'bok' : pctSel >= 50 ? 'bwn' : 'bbd') + '">' + pctSel + '%</span></td></tr>';
-
-  let motBars = ''; let motTabla = ''; let totMot = 0;
-  (motivos || []).forEach(m => { totMot += +(m.cantidad || 0); });
-  (motivos || []).forEach(m => {
-    if (!m.motivo || !m.cantidad) return;
-    const pct = totMot > 0 ? Math.round(m.cantidad / totMot * 100) : 0;
-    const col = m.motivo.toLowerCase().includes('obra') || m.motivo.toLowerCase().includes('labor') ? '#168A43' : m.motivo.toLowerCase().includes('abandono') ? '#C0392B' : m.motivo.toLowerCase().includes('cliente') ? '#2196F3' : '#E8BB26';
-    motBars += '<div class="br"><span class="bl">' + m.motivo + '</span><div class="bt"><div class="bf" style="width:' + pct + '%;background:' + col + '">' + m.cantidad + '</div></div><span class="bp">' + pct + '%</span></div>';
-    const tipo = m.motivo.toLowerCase().includes('obra') || m.motivo.toLowerCase().includes('labor') ? '<span class="b bgr">Estructural</span>' : m.motivo.toLowerCase().includes('cliente') ? '<span class="b bok">Positivo</span>' : m.motivo.toLowerCase().includes('abandono') ? '<span class="b bbd">Crítico</span>' : '<span class="b bwn">Evitable</span>';
-    motTabla += '<tr><td>' + m.motivo + '</td><td style="text-align:center">' + m.cantidad + '</td><td style="text-align:center">' + pct + '%</td><td>' + tipo + '</td></tr>';
-  });
-  if (motTabla) motTabla += '<tr class="trt"><td><strong>Total</strong></td><td style="text-align:center"><strong>' + totMot + '</strong></td><td style="text-align:center"><strong>100%</strong></td><td></td></tr>';
-  const tasaRot = d.hcCierre > 0 ? Math.round(totMot / d.hcCierre * 1000) / 10 : 0;
-
-  let casosFilas = '';
-  (casos || []).forEach((c, i) => {
-    const bco = c.origen === 'AT laboral' ? 'bbd' : c.origen === 'Lic. maternidad' ? 'bin' : 'bgr';
-    const bes = (c.estado || '').toLowerCase().includes('alta') || (c.estado || '').toLowerCase().includes('labor') ? 'bok' : (c.estado || '').toLowerCase().includes('incap') ? 'bbd' : 'bwn';
-    casosFilas += '<tr class="dt" onclick="td(\'cs' + i + '\')"><td>' + (i + 1) + '</td><td><strong>' + (c.nombre || '—') + '</strong></td><td style="font-size:11px">' + (c.identificacion || '—') + '</td><td style="font-size:11px">' + (c.cie10 || '—') + '</td><td>' + (c.ciudad || '—') + '</td><td><span class="b ' + bco + '">' + c.origen + '</span></td><td><span class="b ' + bes + '">' + (c.estado || '—') + '</span></td></tr>' + (c.seguimiento ? '<tr id="cs' + i + '" class="dr"><td colspan="7"><div class="di">▶ ' + c.seguimiento + '</div></td></tr>' : '');
-  });
-
-  let fotosHTML = '';
-  for (let fi = 0; fi < 9; fi++) {
-    if (fotos && fotos[fi]) fotosHTML += '<div class="fs"><img src="' + fotos[fi] + '" alt="' + FOTOLABELS[fi] + '"><div class="fc">' + FOTOLABELS[fi] + '</div></div>';
-    else fotosHTML += '<div class="fs fe"><div style="font-size:20px;color:#DDE4DD">+</div><div style="font-size:10px;color:#5A6A5A">' + FOTOLABELS[fi] + '</div></div>';
+  let prev = null;
+  let prevActive = null;
+  if (ex.previo?.d) {
+    prev = calcularMetricas(ex.previo.d, ex.previo.rqs, ex.previo.motivos, ex.previo.casos, ex.previo.extras || {});
+    prevActive = Array.isArray(ex.previo.activeModules) ? ex.previo.activeModules : null;
   }
+  const ind = construirIndicadores(m, active, prev);
+  // Un módulo que el mes anterior no se reportaba no se compara (sería comparar con ceros inventados).
+  ind.forEach(i => { if (prev && !moduloActivo(prevActive, i.id)) { i.prev = null; delete i.delta; } });
+  const msgs = construirMensajes(m, ind, active, ex, prev);
 
-  const logoCliHTML = d.logoCli ? '<div style="background:white;border-radius:8px;padding:5px 10px"><img src="' + d.logoCli + '" style="height:44px;width:auto;border-radius:4px" alt="' + d.cliNom + '"></div>' : '<div style="background:rgba(255,255,255,.15);border-radius:8px;padding:8px 14px;color:white;font-size:16px;font-weight:700">' + d.cliNom + (d.cliMarca ? ' · ' + d.cliMarca : '') + '</div>';
-  const selBC = pctSel >= 80 ? '' : pctSel >= 50 ? ' am' : ' ro';
+  const mes = nombrePeriodo(d.per);
+  const cli = d.cliNom + (d.cliMarca ? ' · ' + d.cliMarca : '');
+  const ctx = { d, m, prev, ind, msgs, rqs, motivos, casos, fotos, extras: ex, active, mes, cli };
 
-  // semáforo helper
-  const sem = (val, good, warn) => val >= good ? 'ok' : val >= warn ? 'warn' : 'bad';
-  const selSem = sem(pctSel, 80, 50);
-  const rotSem = tasaRot <= 3 ? 'ok' : tasaRot <= 6 ? 'warn' : 'bad';
-  const atSem = d.at === 0 ? 'ok' : d.at <= 1 ? 'warn' : 'bad';
+  const secs = SECCIONES.filter(s => (s.mods || [s.mod]).some(id => moduloActivo(active, id)));
+  const nav = `<nav class="nav" aria-label="Secciones del informe"><div class="nav-in" role="tablist">`
+    + [{ id: 'res', label: 'Resumen', ic: '📋' }, ...secs].map((s, i) => `<button type="button" class="nb" role="tab" id="tb-${s.id}" data-tab="${s.id}" aria-selected="${i === 0}" aria-controls="t-${s.id}" tabindex="${i === 0 ? 0 : -1}"><span class="ic" aria-hidden="true">${s.ic}</span>${esc(s.label)}</button>`).join('')
+    + '</div></nav>';
 
-  // ── CHARTS SVG (fiel a plantilla PLANTILLA OPERACIONES) ──
-  const pendTot = Math.max(0, rqSol - rqCon);
-  const selDonutData = [{label:'Contratadas', value:rqCon, color:'#168A43'},{label:'Pendientes', value:pendTot, color:'#E8EAE8'}];
-  const selDonut = (rqs||[]).length ? donutSVG(selDonutData, {size:170, thickness:28, centerText: pctSel+'%', centerSub:'Efectividad'}) : '';
-  const selDonutLegend = (rqs||[]).length ? donutLegendSVG(selDonutData) : '';
-  const selGauge = gaugeSVG(pctSel, 100, {label: pctSel>=80?'Meta cumplida':pctSel>=50?'En progreso':'Critico', suffix:'%'});
-  const topRQs = (rqs||[]).slice(0,8).map(r=> ({label:(r.rq||r.cargo||'RQ').slice(0,18), value: r.solicitadas>0? Math.round(r.contratadas/r.solicitadas*100):0, color: (r.contratadas/r.solicitadas>=0.9?'#168A43': r.contratadas/r.solicitadas>=0.5?'#E8BB26':'#C0392B') }));
-  const selTopBar = topRQs.length? hBarSVG(topRQs, {width:520}) : '';
-  const rotDonutData = (motivos||[]).filter(m=>m.motivo&&m.cantidad).map((m,i)=>({label:m.motivo, value:Number(m.cantidad)||0}));
-  const rotDonut = rotDonutData.length? donutSVG(rotDonutData, {size:170, thickness:26, centerText: String(totMot), centerSub:'Retiros'}) : '';
-  const rotDonutLegend = rotDonutData.length? donutLegendSVG(rotDonutData):'';
-  const rotHBar = rotDonutData.length? hBarSVG(rotDonutData):'';
-  const hcBars = [{label:'Inicio', value:d.hcInicio, color:'#5A6A5A'},{label:'Ingresos', value:d.hcIng, color:'#168A43'},{label:'Retiros', value:d.hcRet, color:'#C0392B'},{label:'Cierre', value:d.hcCierre, color:'#E8BB26'}];
-  const hcVBar = vBarSVG(hcBars, {width:520, height:210});
-  const sstBars = [{label:'AT', value:d.at, color: d.at>0?'#C0392B':'#168A43'},{label:'OC', value:d.oc, color: d.oc>0?'#E8BB26':'#168A43'},{label:'Mat.', value:d.mat, color:'#2196F3'},{label:'EG dias', value:d.eg, color:'#7B68EE'},{label:'Casos', value:(casos||[]).length, color:'#607D8B'}];
-  const sstVBar = vBarSVG(sstBars, {width:520, height:200});
-  const ausTasa = Number(aus.tasa||0);
-  const ausGauge = gaugeSVG(ausTasa, 6, {label: ausTasa<=2?'Dentro de meta':ausTasa<=4?'Atencion':'Critico', suffix:'%'});
+  const logoCli = d.logoCli
+    ? `<div class="cli-logo"><img src="${esc(d.logoCli)}" alt="${esc(d.cliNom)}" onerror="this.parentNode.style.display='none'"></div>` : '';
+  const hoy = new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
 
+  const hero = `<header class="hero"><div class="hero-in"><div class="hero-top"><div class="hero-logos"><img class="hero-logo" src="${logoDataUri({ onDark: true })}" alt="Proservis"><span class="hero-sep"></span>${logoCli}<span class="cli-nom">${esc(cli)}</span></div>`
+    + `<button type="button" class="btn-print" aria-label="Imprimir o guardar como PDF">🖨 Imprimir / PDF</button></div>`
+    + `<div class="hero-tit"><div class="hero-kicker">Indicadores de gestión</div><h1>Informe de ${esc(mes)}</h1><p>Un resumen claro de cómo va el servicio de personal en ${esc(String(d.cliNom).replace(/[.\s]+$/, ''))}.</p>${hay(d.ejNom) ? `<p class="ej">Tu ejecutivo de cuenta: ${esc(d.ejNom)}</p>` : ''}</div></div></header>`;
 
-  // CSS premium
-  const css = ':root{--vd:#168A43;--vdo:#0F6B33;--vc:#E8F5EE;--am:#E8BB26;--amc:#FDF6D8;--osc:#12212D;--gr:#F2F4F2;--grb:#DDE4DD;--grt:#5A6A5A;--ro:#C0392B;--roc:#FDF0EE;--tx:#12212D;--ok:#168A43;--warn:#E8BB26;--bad:#C0392B}*{box-sizing:border-box;margin:0;padding:0}body{font-family:"Segoe UI",system-ui,Arial,sans-serif;background:#F2F4F2;color:var(--tx);font-size:14px;line-height:1.5}'+
-  '.hdr{background:linear-gradient(135deg,#168A43 0%,#0F6B33 50%,#12212D 100%);position:relative;overflow:hidden;padding:0}.htl{position:absolute;top:0;left:0;width:90px;height:90px;background:var(--am);clip-path:polygon(0 0,100% 0,0 100%);opacity:.95}.hbr{position:absolute;bottom:0;right:0;width:110px;height:110px;background:rgba(255,255,255,.06);clip-path:polygon(100% 0,100% 100%,0 100%)}.hin{display:flex;align-items:center;justify-content:space-between;padding:16px 28px;position:relative;z-index:2;gap:16px;flex-wrap:wrap}.hlogo{height:48px;width:auto;filter:drop-shadow(0 1px 2px rgba(0,0,0,.2))}.hsep{width:1px;height:44px;background:rgba(255,255,255,.28);flex-shrink:0}.hcen{flex:1;text-align:center}.hcen h1{color:#fff;font-size:20px;font-weight:800;letter-spacing:.02em}.hcen p{color:rgba(255,255,255,.82);font-size:11px;margin-top:3px;letter-spacing:.04em;text-transform:uppercase}.hri{display:flex;align-items:center;gap:12px;flex-shrink:0}.hmeta{text-align:right;color:#fff}.hmeta .per{font-size:14px;font-weight:800;color:var(--am)}.hmeta .sub{font-size:11px;opacity:.78;margin-top:2px;line-height:1.3}.cover{background:#fff;border-radius:12px;padding:18px 20px;margin:14px auto;max-width:1100px;display:flex;gap:14px;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,.06);border-left:5px solid var(--vd)}.cover-ico{width:44px;height:44px;border-radius:10px;background:var(--vc);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}.nav{background:var(--osc);display:flex;overflow-x:auto;border-bottom:3px solid var(--am);position:sticky;top:0;z-index:10}.nb{padding:11px 16px;background:none;border:none;cursor:pointer;color:rgba(255,255,255,.62);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;border-bottom:3px solid transparent;margin-bottom:-3px;transition:all .15s}.nb:hover{color:#fff;background:rgba(255,255,255,.06)}.nb.on{color:var(--am);border-bottom-color:var(--am);background:rgba(232,187,38,.08)}.main{max-width:1100px;margin:0 auto;padding:18px 18px 40px}.tab{display:none}.tab.on{display:block}.sb{background:linear-gradient(135deg,var(--vd) 0%,#0F6B33 100%);color:#fff;border-radius:12px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;box-shadow:0 4px 12px rgba(22,138,67,.25)}.sb h2{font-size:20px;font-weight:800;position:relative}.sb p{font-size:12px;opacity:.86;margin-top:3px;position:relative}.sd{position:absolute;top:0;left:0;width:64px;height:64px;background:var(--am);clip-path:polygon(0 0,100% 0,0 100%);opacity:.92}.sd2{position:absolute;bottom:0;right:0;width:72px;height:72px;background:rgba(255,255,255,.07);clip-path:polygon(100% 0,100% 100%,0 100%)}.kg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px}.kp{background:#fff;border-radius:10px;padding:14px 16px;border-left:4px solid var(--vd);box-shadow:0 1px 4px rgba(0,0,0,.07);position:relative;overflow:hidden}.kp.am{border-left-color:var(--am)}.kp.ro{border-left-color:var(--ro)}.kp.ok{border-left-color:var(--ok)}.kp.warn{border-left-color:var(--warn)}.kp.bad{border-left-color:var(--bad)}.kl{font-size:10px;color:var(--grt);font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}.kv{font-size:26px;font-weight:800;color:var(--vd);line-height:1}.kp.am .kv{color:#9A7A10}.kp.ro .kv,.kp.bad .kv{color:var(--ro)}.kp.warn .kv{color:#9A7A10}.kp.ok .kv{color:var(--vd)}.ks{font-size:11px;color:var(--grt);margin-top:3px}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}.tc{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card{background:#fff;border-radius:10px;padding:16px 18px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.07);border:1px solid #EEF2EE}.ct{font-size:11px;font-weight:800;color:var(--vd);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid var(--vc);display:flex;align-items:center;gap:7px}.ct::before{content:"";display:inline-block;width:7px;height:7px;background:var(--am);border-radius:50%;flex-shrink:0}.tbl{width:100%;border-collapse:collapse;font-size:12px}.tbl th{background:var(--vd);color:#fff;padding:8px 9px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;text-align:left}.tbl th:first-child{border-radius:6px 0 0 0}.tbl th:last-child{border-radius:0 6px 0 0}.tbl td{padding:7px 9px;border-bottom:1px solid #E6EBE6;vertical-align:middle}.tbl tr:hover td{background:var(--vc)}.tbl tr.trt td{background:var(--vc);font-weight:700;color:var(--vdo)}.b{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap}.bok{background:#D4EDDA;color:#14501E}.bwn{background:var(--amc);color:#7A6010}.bbd{background:var(--roc);color:#8B1A1A}.bgr{background:var(--gr);color:var(--grt);border:1px solid var(--grb)}.bin{background:#D6EAF8;color:#1A5276}.br{display:flex;align-items:center;gap:8px;margin-bottom:7px}.bl{font-size:11px;width:170px;flex-shrink:0;color:var(--tx);font-weight:600}.bt{flex:1;height:20px;background:#EEF2EE;border-radius:20px;overflow:hidden;border:1px solid #E6EBE6}.bf{height:100%;border-radius:20px;color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;min-width:24px;transition:width .4s}.bp{font-size:11px;font-weight:800;color:var(--grt);width:40px;text-align:right}.sg{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:18px}.sk{text-align:center;background:#fff;border-radius:10px;padding:14px 10px;box-shadow:0 1px 4px rgba(0,0,0,.07);border-top:3px solid var(--grb)}.sk.ok{border-top-color:var(--ok)}.sk.warn{border-top-color:var(--warn)}.sk.bad{border-top-color:var(--bad)}.n{font-size:30px;font-weight:800;line-height:1}.nvd{color:var(--grt)}.nro{color:var(--ro)}.nam{color:#9A7A10}.l{font-size:11px;color:var(--grt);margin-top:4px;font-weight:600}.mv{display:flex;align-items:center;gap:8px;margin-top:14px;justify-content:center;flex-wrap:wrap}.mc{background:#fff;border-radius:10px;padding:12px 18px;text-align:center;min-width:80px;box-shadow:0 1px 4px rgba(0,0,0,.07);border:1px solid #E6EBE6}.mvv{font-size:20px;font-weight:800}.mvl{font-size:10px;color:var(--grt);margin-top:2px;text-transform:uppercase;letter-spacing:.04em}.ma{font-size:14px;font-weight:800;color:var(--am)}.dt{cursor:pointer}.dr{display:none}.di{padding:8px 12px;font-size:12px;color:#4A5A4A;background:var(--vc);border-radius:6px;margin:4px 0;border-left:3px solid var(--vd)}.fs{border-radius:8px;overflow:hidden;aspect-ratio:4/3;position:relative;background:var(--gr);border:1px solid #E6EBE6}.fs img{width:100%;height:100%;object-fit:cover}.fc{position:absolute;bottom:0;left:0;right:0;background:rgba(18,33,45,.78);color:#fff;font-size:10px;padding:4px 6px;font-weight:600;backdrop-filter:blur(2px)}.fe{display:flex;flex-direction:column;align-items:center;justify-content:center;border:2px dashed #DDE4DD;background:#FAFAFA}.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.ftr{background:var(--osc);color:#fff;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:30px;border-top:4px solid var(--am)}.flogo{height:38px;width:auto;opacity:.9}.ftxt{font-size:12px;opacity:.85;line-height:1.4}.bigp{font-size:42px;font-weight:800;line-height:1}.insight{background:var(--amc);border-left:4px solid var(--am);border-radius:8px;padding:10px 14px;font-size:12px;line-height:1.6;color:#5A4A10;margin-top:10px}.insight.ok{background:var(--vc);border-left-color:var(--vd);color:#1A4D2A}.insight.bad{background:var(--roc);border-left-color:var(--ro);color:#7A1F1F}.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:800}.badge.ok{background:#D4EDDA;color:#14501E}.badge.warn{background:var(--amc);color:#7A6010}.badge.bad{background:var(--roc);color:#8B1A1A}.sema{display:flex;gap:6px;align-items:center}.sema span{width:10px;height:10px;border-radius:50%;opacity:.3}.sema.ok span:nth-child(1){opacity:1;background:var(--ok)}.sema.warn span:nth-child(2){opacity:1;background:var(--warn)}.sema.bad span:nth-child(3){opacity:1;background:var(--bad)}.chart-wrap{display:flex;gap:16px;align-items:center;justify-content:center;flex-wrap:wrap;padding:12px;background:#FBFDFB;border:1px solid #E8EAE8;border-radius:10px;margin-bottom:12px}.chart-card{flex:1;min-width:260px;background:#fff;border:1px solid #E8EAE8;border-radius:10px;padding:14px;text-align:center}.chart-title{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#5A6A5A;margin-bottom:8px}@media print{body{background:#fff}.nav{display:none}.tab{display:block !important;margin-bottom:18px;break-inside:avoid}.ftr{break-before:avoid}}@media(max-width:700px){.tc,.fg,.sg{grid-template-columns:1fr}.hin{flex-direction:column;text-align:center}.hri{flex-direction:column}.nav{overflow-x:auto;scroll-snap-type:x mandatory}.nb{scroll-snap-align:start}.ftr{flex-direction:column;text-align:center}.kg{grid-template-columns:1fr 1fr}}';
+  const pie = `<footer class="pie"><div class="pie-in"><img src="${logoDataUri({ onDark: true })}" alt="Proservis"><p>Informe de <strong>${esc(cli)}</strong> · ${esc(mes)} · Confidencial</p><p>Conectamos personas con una mejor calidad de vida · Generado el ${esc(hoy)}</p></div></footer>`;
 
-  // Build nav dynamically
-  const navItems = [{ id: 'res', label: 'Resumen', icon: '⊞' }];
-  if (isActive(active, 'seleccion')) navItems.push({ id: 'sel', label: 'Selección', icon: '◈' });
-  if (isActive(active, 'headcount')) navItems.push({ id: 'hc', label: 'Headcount', icon: '◉' });
-  if (isActive(active, 'rotacion')) navItems.push({ id: 'rot', label: 'Rotación', icon: '↻' });
-  if (isActive(active, 'sst')) navItems.push({ id: 'sst', label: 'SST', icon: '✦' });
-  if (isActive(active, 'nomina')) navItems.push({ id: 'nom', label: 'Nómina', icon: '$' });
-  if (isActive(active, 'ausentismo')) navItems.push({ id: 'aus', label: 'Ausentismo', icon: '⏰' });
-  if (isActive(active, 'capacitacion')) navItems.push({ id: 'cap', label: 'Capacitación', icon: '🎓' });
-  if (isActive(active, 'clima')) navItems.push({ id: 'clima', label: 'Clima', icon: '☺' });
-  if (isActive(active, 'facturacion')) navItems.push({ id: 'fac', label: 'Facturación', icon: '🧾' });
-  if (isActive(active, 'fotos')) navItems.push({ id: 'act', label: 'Actividades', icon: '◑' });
-
-  let navHTML = '<nav class="nav">';
-  navItems.forEach((n, idx) => {
-    navHTML += '<button class="nb' + (idx === 0 ? ' on' : '') + '" onclick="st(\'' + n.id + '\',this)">' + n.icon + ' ' + n.label + '</button>';
-  });
-  navHTML += '</nav>';
-
-  // Ausentismo HTML block
-  let ausHTML = '';
-  if (isActive(active, 'ausentismo')) {
-    const tasa = aus.tasa ?? 0;
-    const semAus = tasa <= 2 ? 'ok' : tasa <= 4 ? 'warn' : 'bad';
-    ausHTML = '<div id="t-aus" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Ausentismo</h2><p>' + mesStr + ' · Control de ausencias</p></div>'
-      + '<div class="kg"><div class="kp ' + semAus + '"><div class="kl">Tasa ausentismo</div><div class="kv">' + tasa + '%</div><div class="ks"><span class="dot ' + semAus + '"></span>' + (semAus === 'ok' ? 'Dentro de meta' : semAus === 'warn' ? 'Atención' : 'Crítico') + '</div></div>'
-      + '<div class="kp"><div class="kl">Horas ausencia</div><div class="kv">' + (aus.horas ?? 0) + '</div></div>'
-      + '<div class="kp"><div class="kl">Eventos</div><div class="kv">' + (aus.eventos ?? 0) + '</div></div>'
-      + '<div class="kp"><div class="kl">Días perdidos</div><div class="kv">' + (aus.diasPerdidos ?? 0) + '</div></div></div>'
-      + (aus.causas ? '<div class="chart-wrap"><div class="chart-card"><div class="chart-title">Tasa ausentismo — gauge</div>'+ausGauge+'</div><div class="chart-card"><div class="chart-title">Resumen</div><div style="font-size:12px;color:var(--grt);line-height:1.6">Eventos: <strong>'+(aus.eventos||0)+'</strong> · Horas: <strong>'+(aus.horas||0)+'</strong> · Dias perdidos: <strong>'+(aus.diasPerdidos||0)+'</strong></div></div></div><div class="card"><div class="ct">Principales causas</div><p style="font-size:13px;line-height:1.6">' + aus.causas + '</p></div>' : '')
-      + (aus.obs ? '<div class="insight ' + semAus + '"><strong>Plan de acción:</strong> ' + aus.obs + '</div>' : '') + '</div>';
-  }
-
-  let capHTML = '';
-  if (isActive(active, 'capacitacion')) {
-    const totalHoras = cap.horas ?? 0;
-    let temasRows = '';
-    (cap.temas || []).forEach(t => {
-      temasRows += '<tr><td>' + (t.tema || '—') + '</td><td style="text-align:center">' + (t.asistentes ?? 0) + '</td><td style="text-align:center">' + (t.horas ?? 0) + '</td></tr>';
-    });
-    capHTML = '<div id="t-cap" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Capacitación & Formación</h2><p>' + mesStr + '</p></div>'
-      + '<div class="kg"><div class="kp"><div class="kl">Horas formación</div><div class="kv">' + totalHoras + '</div></div>'
-      + '<div class="kp"><div class="kl">Personas capacitadas</div><div class="kv">' + (cap.personas ?? 0) + '</div></div>'
-      + '<div class="kp"><div class="kl">Cobertura</div><div class="kv">' + (cap.cobertura ?? 0) + '%</div></div></div>'
-      + (temasRows ? '<div class="card"><div class="ct">Temas impartidos</div><table class="tbl"><thead><tr><th>Tema</th><th style="text-align:center">Asistentes</th><th style="text-align:center">Horas</th></tr></thead><tbody>' + temasRows + '</tbody></table></div>' : '')
-      + (cap.obs ? '<div class="card"><div class="ct">Observaciones</div><p style="font-size:13px;line-height:1.6">' + cap.obs + '</p></div>' : '') + '</div>';
-  }
-
-  let climaHTML = '';
-  if (isActive(active, 'clima')) {
-    const sat = clima.satisfaccion ?? 0;
-    const satSem = sat >= 85 ? 'ok' : sat >= 70 ? 'warn' : 'bad';
-    climaHTML = '<div id="t-clima" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Clima Laboral & Bienestar</h2><p>Satisfacción y compromiso · ' + mesStr + '</p></div>'
-      + '<div class="kg"><div class="kp ' + satSem + '"><div class="kl">Satisfacción</div><div class="kv">' + sat + '%</div><div class="ks"><span class="badge ' + satSem + '">' + (satSem === 'ok' ? 'Excelente' : satSem === 'warn' ? 'Aceptable' : 'Por mejorar') + '</span></div></div>'
-      + '<div class="kp"><div class="kl">eNPS</div><div class="kv">' + (clima.enps ?? 0) + '</div></div>'
-      + '<div class="kp"><div class="kl">Participación</div><div class="kv">' + (clima.participacion ?? 0) + '%</div></div>'
-      + '<div class="kp"><div class="kl">Actividades bienestar</div><div class="kv">' + (clima.actividades ?? 0) + '</div></div></div>'
-      + (clima.encuesta ? '<div class="card"><div class="ct">Voz del colaborador</div><p style="font-size:13px;line-height:1.6;font-style:italic">“' + clima.encuesta + '”</p></div>' : '')
-      + (clima.plan ? '<div class="insight ok"><strong>Plan de mejora:</strong> ' + clima.plan + '</div>' : '') + '</div>';
-  }
-
-  let facHTML = '';
-  if (isActive(active, 'facturacion')) {
-    const estado = fac.estado || 'Al día';
-    const bc = estado === 'Al día' ? 'bok' : estado === 'En mora' ? 'bbd' : 'bwn';
-    facHTML = '<div id="t-fac" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Facturación & Financiero</h2><p>' + mesStr + '</p></div>'
-      + '<div class="kg"><div class="kp"><div class="kl">Valor facturado</div><div class="kv" style="font-size:20px">$ ' + (Number(fac.valor || 0).toLocaleString('es-CO')) + '</div></div>'
-      + '<div class="kp"><div class="kl">Costo nómina</div><div class="kv" style="font-size:20px">$ ' + (Number(fac.costo || 0).toLocaleString('es-CO')) + '</div></div>'
-      + '<div class="kp"><div class="kl">Margen</div><div class="kv">' + (fac.margen ?? 0) + '%</div></div>'
-      + '<div class="kp"><div class="kl">Estado</div><div class="kv" style="font-size:14px"><span class="b ' + bc + '">' + estado + '</span></div></div></div>'
-      + '<div class="kg"><div class="kp"><div class="kl">Días cartera</div><div class="kv">' + (fac.cartera ?? 0) + '</div></div><div class="kp"><div class="kl">Cumplimiento</div><div class="kv">' + (fac.cumplimiento ?? 100) + '%</div></div></div>'
-      + (fac.obs ? '<div class="card"><div class="ct">Observaciones financieras</div><p style="font-size:13px;line-height:1.6">' + fac.obs + '</p></div>' : '') + '</div>';
-  }
-
-  // resumen insights
-  let resumenInsights = '';
-  if (selSem === 'bad') resumenInsights += '<div class="insight bad"><strong>Atención Selección:</strong> Efectividad ' + pctSel + '% por debajo de meta (80%). Revisar cuellos de botella en reclutamiento.</div>';
-  else if (selSem === 'ok') resumenInsights += '<div class="insight ok"><strong>Selección excelente:</strong> ' + pctSel + '% de cumplimiento, por encima de meta.</div>';
-  if (rotSem === 'bad') resumenInsights += '<div class="insight bad"><strong>Rotación alta:</strong> ' + tasaRot + '% supera el umbral saludable. Revisar causales evitables.</div>';
-  if (d.at > 0) resumenInsights += '<div class="insight bad"><strong>SST:</strong> ' + d.at + ' accidente(s) AT en el mes. Aplicar lecciones aprendidas.</div>';
-  if (!resumenInsights) resumenInsights = '<div class="insight ok"><strong>Mes sólido:</strong> Indicadores dentro de meta. Mantener buenas prácticas y documentar aprendizajes para replicar.</div>';
-
-  // Build cover
-  const coverHTML = '<div class="cover"><div class="cover-ico">◆</div><div style="flex:1"><div style="font-size:11px;font-weight:800;color:var(--vd);text-transform:uppercase;letter-spacing:.06em">Informe ejecutivo confidencial</div><div style="font-size:13px;color:var(--grt);margin-top:2px">Este informe fue personalizado según los módulos configurados para <strong>' + d.cliNom + '</strong>. Solo se muestran las secciones activas.</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--grt)">Período</div><div style="font-size:15px;font-weight:800;color:var(--osc)">' + mesStr + '</div></div></div>';
-
-  return '<!DOCTYPE html>\n<html lang="es">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>Informe ' + d.cliNom + ' · ' + mesStr + '</title>\n<style>\n' + css + '\n</style>\n</head>\n<body>\n'
-    + '<header class="hdr"><div class="htl"></div><div class="hbr"></div>\n'
-    + '<div class="hin"><img src="data:image/png;base64,' + LB + '" class="hlogo" alt="Proservis"><div class="hsep"></div>\n'
-    + '<div class="hcen"><h1>Indicadores de Gestión</h1><p>Conectamos personas con una mejor calidad de vida</p></div>\n'
-    + '<div class="hri">' + logoCliHTML + '<div class="hmeta"><div class="per">' + mesStr + '</div><div class="sub">' + d.cliNom + (d.cliMarca ? ' · ' + d.cliMarca : '') + '<br>Ejecutivo: ' + d.ejNom + '</div></div></div></div></header>\n'
-    + navHTML + '\n'
-    + '<main class="main">\n' + coverHTML + '\n'
-    + '<div id="t-res" class="tab on"><div class="kg">'
-    + (isActive(active, 'headcount') ? '<div class="kp"><div class="kl">Activos al cierre</div><div class="kv">' + d.hcCierre + '</div><div class="ks">Inicio: ' + d.hcInicio + ' · +' + d.hcIng + ' ingresos</div></div>' : '')
-    + (isActive(active, 'rotacion') ? '<div class="kp ' + rotSem + '"><div class="kl">Tasa de rotación</div><div class="kv">' + tasaRot + '%</div><div class="ks">' + totMot + ' retiros / ' + d.hcCierre + ' activos</div></div>' : '')
-    + (isActive(active, 'seleccion') ? '<div class="kp ' + selSem + '"><div class="kl">Efectividad selección</div><div class="kv">' + pctSel + '%</div><div class="ks">' + rqCon + ' de ' + rqSol + ' vacantes</div></div>' : '')
-    + (isActive(active, 'sst') ? '<div class="kp ' + atSem + '"><div class="kl">Accidentes AT</div><div class="kv">' + d.at + '</div><div class="ks">+ ' + d.oc + ' común/tránsito</div></div>' : '')
-    + (isActive(active, 'sst') ? '<div class="kp' + ((casos || []).length > 0 ? ' warn' : '') + '"><div class="kl">Casos médicos</div><div class="kv">' + (casos || []).length + '</div><div class="ks">En seguimiento</div></div>' : '')
-    + (isActive(active, 'headcount') ? '<div class="kp"><div class="kl">Ingresos</div><div class="kv">' + d.hcIng + '</div><div class="ks">vs ' + d.hcRet + ' retiros</div></div>' : '')
-    + (isActive(active, 'ausentismo') ? '<div class="kp"><div class="kl">Ausentismo</div><div class="kv">' + (aus.tasa ?? 0) + '%</div><div class="ks">' + (aus.horas ?? 0) + ' horas</div></div>' : '')
-    + (isActive(active, 'facturacion') ? '<div class="kp"><div class="kl">Facturación</div><div class="kv" style="font-size:18px">$ ' + Number(fac.valor || 0).toLocaleString('es-CO').slice(0, 12) + '</div></div>' : '')
-    + '</div>'
-    + resumenInsights
-    + '<div class="tc" style="margin-top:14px"><div class="card"><div class="ct">Rotación — causales</div>' + (rotHBar || motBars || '<div style="font-size:12px;color:var(--grt);padding:8px 0">Sin retiros registrados este mes — excelente retención.</div>') + '</div><div class="card"><div class="ct">Selección — efectividad</div><div style="display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap"><div>'+selDonut+'</div><div style="text-align:left"><div class="bigp" style="color:' + (pctSel >= 80 ? 'var(--vd)' : pctSel >= 50 ? '#9A7A10' : 'var(--ro)') + '">' + pctSel + '%</div><div style="font-size:12px;color:var(--grt);margin-top:5px">' + rqCon + ' de ' + rqSol + ' vacantes</div>'+selDonutLegend+'</div></div></div></div>' + (rotDonutData.length||topRQs.length ? '<div class="chart-wrap"><div class="chart-card"><div class="chart-title">Vacantes por RQ — % cumplimiento</div>'+selTopBar+'</div>' + (rotDonutData.length?' <div class="chart-card"><div class="chart-title">Rotación — distribución</div><div style="display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap"><div>'+rotDonut+'</div><div style="text-align:left;flex:1;min-width:180px">'+rotDonutLegend+'</div></div></div>':'') + '</div>':'') + '</div>\n'
-    + (isActive(active, 'seleccion') ? '<div id="t-sel" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Selección y Contratación</h2><p>' + mesStr + ' · ' + d.cliNom + '</p></div><div class="kg"><div class="kp"><div class="kl">Solicitadas</div><div class="kv">' + rqSol + '</div></div><div class="kp ' + selSem + '"><div class="kl">Contratadas</div><div class="kv">' + rqCon + '</div><div class="ks"><span class="b ' + (pctSel >= 80 ? 'bok' : pctSel >= 50 ? 'bwn' : 'bbd') + '">' + pctSel + '%</span></div></div><div class="kp ro"><div class="kl">Pendientes</div><div class="kv">' + (rqSol - rqCon) + '</div></div></div><div class="chart-wrap"><div class="chart-card"><div class="chart-title">Oportunidad & Efectividad — ' + pctSel + '%</div><div style="display:flex;gap:16px;align-items:center;justify-content:center;flex-wrap:wrap"><div>'+selDonut+'</div><div>'+selGauge+'</div></div>'+selDonutLegend+'</div><div class="chart-card"><div class="chart-title">Cumplimiento por RQ (top 8)</div>'+selTopBar+'</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px"><div class="card" style="margin-bottom:0"><div class="ct">Vacantes activas</div><div style="text-align:center;padding:8px 0"><div class="bigp" style="color:#C0392B">'+(rqSol - rqCon)+'</div><div style="font-size:11px;color:var(--grt)">Pendientes por cubrir</div></div></div><div class="card" style="margin-bottom:0"><div class="ct">Indicador oportunidad</div><div style="font-size:12px;color:var(--grt);line-height:1.5">Efectividad <strong>'+rqCon+'/'+rqSol+'</strong> vacantes cubiertas. ' + (pctSel>=80?'Meta superada — proceso agil.':'Meta por debajo — revisar fuentes.') + '</div></div></div><div class="card"><div class="ct">Detalle de requerimientos</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>RQ PT</th><th>Agencia</th><th>Ciudad</th><th>Cargo</th><th style="text-align:center">Solicit.</th><th style="text-align:center">Contrat.</th><th style="text-align:center">Pendient.</th><th style="text-align:center">Cumplim.</th></tr></thead><tbody>' + rqRows + rqTotal + '</tbody></table></div></div>' + (rqSol - rqCon > 0 ? '<div class="insight warn">Quedan ' + (rqSol - rqCon) + ' vacante(s) pendiente(s). Coordinar con Selección para cierre.</div>' : '') + '</div>\n' : '')
-    + (isActive(active, 'headcount') ? '<div id="t-hc" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Administración de Personal</h2><p>Movimiento · ' + mesStr + '</p></div><div class="kg"><div class="kp"><div class="kl">Inicio</div><div class="kv">' + d.hcInicio + '</div></div><div class="kp"><div class="kl">Ingresos</div><div class="kv">' + d.hcIng + '</div></div><div class="kp am"><div class="kl">Retiros</div><div class="kv">' + d.hcRet + '</div></div><div class="kp"><div class="kl">Cierre</div><div class="kv">' + d.hcCierre + '</div><div class="ks"><span class="b ' + (d.hcCierre >= d.hcInicio ? 'bok' : 'bbd') + '">' + (d.hcCierre >= d.hcInicio ? '+' : '') + (d.hcCierre - d.hcInicio) + ' neto</span></div></div></div><div class="chart-wrap"><div class="chart-card"><div class="chart-title">Headcount — evolución del mes</div>'+hcVBar+'</div></div><div class="card"><div class="ct">Movimiento del período</div><table class="tbl" style="margin-bottom:14px"><thead><tr><th>Concepto</th><th style="text-align:center">' + mesStr + '</th></tr></thead><tbody><tr><td>Activos inicio</td><td style="text-align:center;font-weight:700">' + d.hcInicio + '</td></tr><tr><td>Ingresos</td><td style="text-align:center;font-weight:700;color:var(--vd)">' + d.hcIng + '</td></tr><tr><td>Retiros</td><td style="text-align:center;font-weight:700;color:var(--ro)">' + d.hcRet + '</td></tr><tr class="trt"><td><strong>Activos cierre</strong></td><td style="text-align:center;font-size:19px;color:var(--vd)"><strong>' + d.hcCierre + '</strong></td></tr></tbody></table><div class="mv"><div class="mc" style="background:var(--vd);color:#fff"><div class="mvv">' + d.hcInicio + '</div><div class="mvl" style="color:rgba(255,255,255,.8)">Inicio</div></div><div class="ma">+' + d.hcIng + ' ▶</div><div class="mc" style="background:var(--vc);color:var(--vd)"><div class="mvv">' + (d.hcInicio + d.hcIng) + '</div><div class="mvl">Bruto</div></div><div class="ma">−' + d.hcRet + ' ▶</div><div class="mc" style="background:var(--am);color:var(--osc)"><div class="mvv">' + d.hcCierre + '</div><div class="mvl">Cierre</div></div></div></div></div>\n' : '')
-    + (isActive(active, 'rotacion') ? '<div id="t-rot" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Rotación Actual</h2><p>Causales · ' + mesStr + '</p></div><div class="kg"><div class="kp am"><div class="kl">Total retiros</div><div class="kv">' + totMot + '</div></div><div class="kp ' + rotSem + '"><div class="kl">Tasa rotación</div><div class="kv">' + tasaRot + '%</div><div class="ks">' + (rotSem === 'ok' ? 'Saludable' : rotSem === 'warn' ? 'Atención' : 'Crítica') + '</div></div></div><div class="chart-wrap"><div class="chart-card"><div class="chart-title">Causales — barras horizontales</div>'+rotHBar+'</div><div class="chart-card"><div class="chart-title">Distribución — donut</div><div style="display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap"><div>'+rotDonut+'</div><div style="text-align:left;flex:1;min-width:160px">'+rotDonutLegend+'</div></div></div></div><div class="tc"><div class="card"><div class="ct">Causales — %</div>' + (motBars || '<div style="font-size:12px;color:var(--grt)">Sin retiros este mes.</div>') + '</div><div class="card"><div class="ct">Detalle</div><table class="tbl"><thead><tr><th>Motivo</th><th style="text-align:center">Cant.</th><th style="text-align:center">%</th><th>Tipo</th></tr></thead><tbody>' + (motTabla || '<tr><td colspan="4" style="text-align:center;color:var(--grt)">Sin datos</td></tr>') + '</tbody></table>' + (d.rotObs ? '<div style="background:var(--amc);border-left:3px solid var(--am);border-radius:8px;padding:9px 12px;font-size:12px;margin-top:10px;color:#7A6010">' + d.rotObs + '</div>' : '') + '</div></div></div>\n' : '')
-    + (isActive(active, 'sst') ? '<div id="t-sst" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Indicadores SST</h2><p>Dec. 1072/2015 · ' + mesStr + '</p></div><div class="sg"><div class="sk ' + (d.at > 0 ? 'bad' : 'ok') + '"><div class="n ' + (d.at > 0 ? 'nro' : 'nvd') + '">' + d.at + '</div><div class="l">Accidentes AT</div></div><div class="sk ok"><div class="n nvd">0</div><div class="l">Mortales</div></div><div class="sk ' + (d.oc > 0 ? 'warn' : 'ok') + '"><div class="n ' + (d.oc > 0 ? 'nam' : 'nvd') + '">' + d.oc + '</div><div class="l">Origen común/tránsito</div></div><div class="sk ' + (d.mat > 0 ? 'warn' : 'ok') + '"><div class="n ' + (d.mat > 0 ? 'nam' : 'nvd') + '">' + d.mat + '</div><div class="l">Lic. maternidad</div></div><div class="sk ' + (d.eg > 0 ? 'warn' : 'ok') + '"><div class="n ' + (d.eg > 0 ? 'nam' : 'nvd') + '">' + d.eg + '</div><div class="l">Días perdidos E.G.</div></div><div class="sk ok"><div class="n nvd">' + d.arl + '%</div><div class="l">Cobertura ARL</div></div><div class="sk ok"><div class="n nvd">' + (casos || []).length + '</div><div class="l">Casos seguimiento</div></div><div class="sk ok"><div class="n nvd">' + d.ind + '</div><div class="l">Inducciones SST</div></div></div><div class="chart-wrap"><div class="chart-card"><div class="chart-title">Expuestos y accidentalidad — barras</div>'+sstVBar+'</div><div class="chart-card"><div class="chart-title">Tasa & Severidad</div><div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap"><div style="text-align:center"><div style="font-size:10px;font-weight:700;color:var(--grt)">TASA NACIONAL</div><div style="font-size:22px;font-weight:800;color:var(--ro)">'+(d.at>0? (d.at/d.hcCierre*100).toFixed(2):'0')+'%</div><div style="font-size:10px;color:var(--grt)">AT / expuestos</div></div><div style="text-align:center;border-left:1px solid #E8EAE8;padding-left:12px"><div style="font-size:10px;font-weight:700;color:var(--grt)">SEVERIDAD</div><div style="font-size:22px;font-weight:800;color:#7B68EE">'+d.eg+' días</div><div style="font-size:10px;color:var(--grt)">Días perdidos</div></div></div></div></div>' + ((casos || []).length ? '<div class="card"><div class="ct">Casos médicos &nbsp;<small style="font-weight:400;font-size:10px;color:var(--grt)">Clic para ver seguimiento</small></div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>#</th><th>Colaborador</th><th>Identificación</th><th>Diagnóstico</th><th>Ciudad</th><th>Origen</th><th>Estado</th></tr></thead><tbody>' + casosFilas + '</tbody></table></div></div>' : '') + (d.sstObs ? '<div class="card"><div class="ct">Observaciones SST</div><p style="font-size:13px;line-height:1.6">' + d.sstObs + '</p></div>' : '') + '</div>\n' : '')
-    + (isActive(active, 'nomina') ? '<div id="t-nom" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Informe de Nómina</h2><p>' + mesStr + '</p></div><div class="kg"><div class="kp"><div class="kl">Total liquidados</div><div class="kv">' + d.nliq + '</div></div><div class="kp' + (d.ninc > 0 ? ' warn' : ' ok') + '"><div class="kl">Incapacidades</div><div class="kv">' + d.ninc + '</div></div><div class="kp"><div class="kl">Licencias</div><div class="kv">' + d.nlic + '</div></div><div class="kp"><div class="kl">H. extras diurnas</div><div class="kv">' + d.nhed + '</div></div><div class="kp"><div class="kl">H. extras nocturnas</div><div class="kv">' + d.nhen + '</div></div><div class="kp' + (d.nerr > 0 ? ' bad' : ' ok') + '"><div class="kl">Errores</div><div class="kv">' + d.nerr + '</div></div></div>' + (d.nobs ? '<div class="card"><div class="ct">Observaciones</div><p style="font-size:13px;line-height:1.6">' + d.nobs + '</p></div>' : '') + (d.nerr > 0 ? '<div class="insight bad"><strong>Requiere acción:</strong> ' + d.nerr + ' error(es) detectado(s) en liquidación. Verificar y reprocesar.</div>' : '<div class="insight ok"><strong>Nómina sin novedades críticas.</strong> Proceso dentro de lo esperado.</div>') + '</div>\n' : '')
-    + ausHTML + capHTML + climaHTML + facHTML
-    + (isActive(active, 'fotos') ? '<div id="t-act" class="tab"><div class="sb"><div class="sd"></div><div class="sd2"></div><h2>Actividades — Registro fotográfico</h2><p>' + mesStr + '</p></div><div class="card"><div class="ct">Galería — 9 espacios</div><div class="fg">' + fotosHTML + '</div></div></div>\n' : '')
-    + '</main>\n'
-    + '<footer class="ftr"><img src="data:image/png;base64,' + LB + '" class="flogo" alt="Proservis"><div class="ftxt">Informe · <strong>' + d.cliNom + (d.cliMarca ? ' (' + d.cliMarca + ')' : '') + '</strong> · ' + mesStr + ' · Confidencial — Uso interno cliente / Proservis</div><div style="color:rgba(255,255,255,.55);font-size:11px;text-align:right">Conectamos personas<br>con una mejor calidad de vida<br><span style="opacity:.6">Generado: ' + new Date().toLocaleDateString('es-CO') + '</span></div></footer>\n'
-    + '<script>\nfunction st(n,b){document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("on")});document.querySelectorAll(".nb").forEach(function(x){x.classList.remove("on")});document.getElementById("t-"+n).classList.add("on");if(b)b.classList.add("on");window.scrollTo({top:0,behavior:"smooth"});}\nfunction td(id){var r=document.getElementById(id);if(r)r.style.display=(r.style.display==="table-row")?"none":"table-row";}\n</script>\n</body>\n</html>';
+  return '<!DOCTYPE html>\n<html lang="es">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+    + `<title>Informe ${esc(d.cliNom)} · ${esc(mes)}</title>\n<style>\n${REPORT_CSS}\n</style>\n</head>\n<body style="margin:0">\n`
+    + `<div class="rpt${ex.compacto ? ' rpt-compacto' : ''}" id="rpt">${hero}${nav}<main class="main">${secResumen(ctx)}${secs.map(s => s.fn(ctx)).join('')}</main>${pie}<div class="zoom" role="dialog" aria-label="Foto ampliada"><img alt=""></div></div>\n`
+    + `<script>\n${REPORT_JS}\n</script>\n</body>\n</html>`;
 }

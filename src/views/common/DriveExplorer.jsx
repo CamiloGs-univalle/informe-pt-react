@@ -179,7 +179,7 @@ export default function DriveExplorer({ onFilesSelected }) {
             style={{ padding: '14px 32px', fontSize: 15, background: 'linear-gradient(135deg, #4285F4, #34A853)' }}>
             {loading ? '⏳ Conectando...' : '🔗 Conectar con Google Drive'}
           </button>
-          <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 14 }}>
+          <div style={{ fontSize: 12, color: 'var(--grt)', marginTop: 14 }}>
             Se abrirá una ventana de Google para autorizar el acceso
           </div>
         </div>
@@ -220,7 +220,7 @@ export default function DriveExplorer({ onFilesSelected }) {
             {user?.photoLink && <img src={user.photoLink} alt="" style={{ width: 32, height: 32, borderRadius: '50%' }} />}
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--vdo)' }}>✅ Conectado a Google Drive</div>
-              <div style={{ fontSize: 11, color: 'var(--grt)' }}>{user?.displayName} · {user?.emailAddress}</div>
+              <div style={{ fontSize: 12, color: 'var(--grt)' }}>{user?.displayName} · {user?.emailAddress}</div>
             </div>
           </div>
           <button className="btn bro bsm" onClick={handleDisconnect}>Desconectar</button>
@@ -231,9 +231,9 @@ export default function DriveExplorer({ onFilesSelected }) {
       <div style={{ display: 'flex', gap: 2, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         {path.map((p, i) => (
           <span key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            {i > 0 && <span style={{ color: 'var(--grt)', fontSize: 11 }}>/</span>}
+            {i > 0 && <span style={{ color: 'var(--grt)', fontSize: 12 }}>/</span>}
             <button className="btn bgh bsm" onClick={() => navigateToBreadcrumb(i)}
-              style={{ padding: '4px 10px', fontSize: 11, fontWeight: i === path.length - 1 ? 700 : 400 }}>
+              style={{ padding: '4px 10px', fontSize: 12, fontWeight: i === path.length - 1 ? 700 : 400 }}>
               {p.name}
             </button>
           </span>
@@ -273,7 +273,7 @@ export default function DriveExplorer({ onFilesSelected }) {
                 <div className="clnm">{f.name}</div>
                 <div className="clmt">{f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('es-CO') : ''}</div>
               </div>
-              <div className="clri"><span style={{ fontSize: 11, color: 'var(--vd)', fontWeight: 600 }}>→ Abrir</span></div>
+              <div className="clri"><span style={{ fontSize: 12, color: 'var(--vd)', fontWeight: 600 }}>→ Abrir</span></div>
             </div>
           ))}
         </div>

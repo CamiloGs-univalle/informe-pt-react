@@ -8,6 +8,7 @@
  * See docs/MODEL.md for the full entity/field reference.
  */
 import { DB, saveDB } from './db';
+import { nuevoId } from '../utils/ids';
 
 /** Returns every Cliente record. */
 export function getClis() {
@@ -33,9 +34,9 @@ export function getCliCountForEj(ejId) {
 export function saveCli(data) {
   if (data.id) {
     const c = DB.clis.find(x => x.id === data.id);
-    if (c) Object.assign(c, { asignaciones: {}, ...data });
+    if (c) Object.assign(c, data);
   } else {
-    data.id = 'c' + Date.now();
+    data.id = nuevoId('c', DB.clis);
     data.logo = data.logo || null;
     data.driveFolder = data.driveFolder || '';
     data.asignaciones = data.asignaciones || {};
@@ -67,16 +68,13 @@ export function getClisForAreaUser(userId) {
   return DB.clis.filter(c => c.asignaciones && Object.values(c.asignaciones).includes(userId));
 }
 
-/** Clientes visibles para un usuario (ejecutivo líder + asignaciones de área) */
-export function getClisVisiblesParaUsuario(user) {
-  if (!user) return [];
-  if (user.role === 'super_admin') return DB.clis;
-  return DB.clis.filter(c => c.ejId === user.id || (c.asignaciones && Object.values(c.asignaciones).includes(user.id)));
-}
-
 /** Deletes a Cliente by id. */
 export function deleteCli(id) {
   DB.clis = DB.clis.filter(c => c.id !== id);
+  // Sin dejar huérfanos: informes, aportes y configuraciones propias de ese cliente.
+  DB.infs = DB.infs.filter(i => i.cliId !== id);
+  DB.contribuciones = DB.contribuciones.filter(c => c.cliId !== id);
+  Object.keys(DB.moduloConfigs).forEach(k => { if (k.endsWith('_' + id)) delete DB.moduloConfigs[k]; });
   saveDB();
 }
 

@@ -22,7 +22,7 @@ export default function StepFotos({ fotos, onFoto, onRemoveFoto }) {
             ) : (
               <>
                 <div style={{ fontSize: 20, color: 'var(--grb)' }}>+</div>
-                <div style={{ fontSize: 10, color: 'var(--grt)' }}>{label}</div>
+                <div style={{ fontSize: 11, color: 'var(--grt)' }}>{label}</div>
               </>
             )}
             <input id={'foto-' + i} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => onFoto(i, e)} />

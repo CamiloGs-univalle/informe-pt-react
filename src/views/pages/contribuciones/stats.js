@@ -9,6 +9,7 @@
  * react-refresh/only-export-components.
  */
 import { ESTADOS } from '../../../models/Contribucion';
+import { plural } from '../../../utils/format';
 
 export function computeStats(contribs, periodoActual) {
   const delPeriodo = contribs.filter(c => c.per === periodoActual);
@@ -36,20 +37,12 @@ export function computeStats(contribs, periodoActual) {
   };
 }
 
-/** Un solo mensaje, priorizado, para que el trabajador sepa qué mirar primero. */
+/** Un solo mensaje, priorizado, para que la persona sepa qué mirar primero. */
 export function computeWorkerInsight(stats) {
-  if (stats.rechazadasActivas.length > 0) {
-    const n = stats.rechazadasActivas.length;
-    return { tone: 'bad', text: `Tienes ${n} contribución${n !== 1 ? 'es' : ''} con correcciones pedidas por tu Ejecutivo — revísala${n !== 1 ? 's' : ''} abajo.` };
-  }
-  if (stats.pendientesPeriodo > 0) {
-    return { tone: 'warn', text: `Te falta${stats.pendientesPeriodo !== 1 ? 'n' : ''} ${stats.pendientesPeriodo} cliente${stats.pendientesPeriodo !== 1 ? 's' : ''} por reportar este período.` };
-  }
-  if (stats.qualityPct !== null && stats.qualityPct < 70) {
-    return { tone: 'warn', text: `Tu tasa de aprobación a la primera es ${stats.qualityPct}% — revisa bien antes de marcar completado.` };
-  }
-  if (stats.qualityPct !== null && stats.qualityPct >= 90) {
-    return { tone: 'good', text: `Excelente trabajo — ${stats.qualityPct}% de tus contribuciones pasan validación a la primera.` };
-  }
-  return { tone: 'good', text: '¡Vas al día! No tienes pendientes para este período.' };
+  const n = stats.rechazadasActivas.length;
+  if (n > 0) return { tone: 'bad', text: `Tienes ${plural(n, 'aporte')} con correcciones pedidas por tu ejecutivo.` };
+  if (stats.pendientesPeriodo > 0) return { tone: 'warn', text: `${stats.pendientesPeriodo === 1 ? 'Te falta' : 'Te faltan'} ${plural(stats.pendientesPeriodo, 'cliente')} por reportar en este período.` };
+  if (stats.qualityPct !== null && stats.qualityPct < 70) return { tone: 'warn', text: `Solo el ${stats.qualityPct}% de tus aportes pasa a la primera: revisa bien antes de enviar.` };
+  if (stats.qualityPct !== null && stats.qualityPct >= 90) return { tone: 'good', text: `Excelente: el ${stats.qualityPct}% de tus aportes pasa validación a la primera.` };
+  return { tone: 'good', text: 'Vas al día: no tienes pendientes en este período.' };
 }

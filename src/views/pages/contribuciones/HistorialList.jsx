@@ -1,44 +1,25 @@
-/**
- * views/pages/contribuciones/HistorialList.jsx
- * ─────────────────────────────────────────────────────────────────────────
- * Todo lo que el trabajador ha subido alguna vez, en orden — para que "ver
- * mis contribuciones" sea real y no solo lo pendiente de hoy. Cada fila ya
- * trae el veredicto del Ejecutivo cuando lo hay (validado/rechazado y por
- * qué), así el historial también sirve como bitácora de feedback.
- */
+/** Todo lo que la persona ha subido, con el veredicto del ejecutivo cuando lo hay. */
 import { ESTADO_META, ESTADOS } from '../../../models/Contribucion';
-import { fmtPerLong, timeAgo } from '../../../utils/format';
+import { fmtPerLong, timeAgo, plural } from '../../../utils/format';
+import EmptyState from '../../common/EmptyState';
 
-export default function HistorialList({ items }) {
-  if (!items.length) {
-    return <div className="alrt aam">Todavía no has subido ninguna contribución. En cuanto guardes un borrador o completes una, aparecerá aquí.</div>;
-  }
+export default function HistorialList({ items, onOpen }) {
+  if (!items.length) return <EmptyState icon="🕘" title="Aún no has subido aportes">Cuando guardes un borrador o envíes tu parte de un cliente, quedará registrado aquí.</EmptyState>;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <ul className="hist-list">
       {items.map(c => {
         const meta = ESTADO_META[c.estado] || ESTADO_META[ESTADOS.PENDIENTE];
         return (
-          <div key={c.id} className="fade-in" style={{
-            display: 'flex', alignItems: 'flex-start', gap: 12, background: '#fff', borderRadius: 10,
-            padding: '11px 14px', boxShadow: '0 1px 4px rgba(0,0,0,.06)', borderLeft: '4px solid ' + meta.color,
-          }}>
-            <span style={{ fontSize: 18, flexShrink: 0 }}>{meta.icon}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 800, fontSize: 13, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {c.cliNom}
-                <span className="b" style={{ background: meta.bg, color: meta.color, fontWeight: 800 }}>{meta.label}</span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 2 }}>
-                {fmtPerLong(c.per)} · {timeAgo(c.updatedAt)}
-                {c.rechazosCount ? ` · ${c.rechazosCount} corrección${c.rechazosCount !== 1 ? 'es' : ''} en el camino` : ''}
-              </div>
-              {c.estado === ESTADOS.RECHAZADO && c.obs && (
-                <div style={{ fontSize: 11, color: '#8B1A1A', marginTop: 4 }}>💬 {c.obs}</div>
-              )}
+          <li key={c.id} style={{ borderLeftColor: meta.color }}>
+            <div className="hist-main">
+              <div className="hist-t">{c.cliNom} <span className="chip" style={{ background: meta.bg, borderColor: meta.color + '66', color: c.estado === ESTADOS.COMPLETADO ? '#7A6010' : meta.color }}>{meta.label}</span></div>
+              <div className="hist-s">{c.areaNom} · {fmtPerLong(c.per)} · {timeAgo(c.updatedAt)}{c.rechazosCount ? ` · ${plural(c.rechazosCount, 'corrección', 'correcciones')} pedidas` : ''}</div>
+              {c.estado === ESTADOS.RECHAZADO && c.obs && <div className="hist-obs">“{c.obs}”</div>}
             </div>
-          </div>
+            <button type="button" className="btn bgh bsm" onClick={() => onOpen(c)}>{[ESTADOS.COMPLETADO, ESTADOS.VALIDADO].includes(c.estado) ? 'Ver cómo quedó' : 'Abrir y seguir'}</button>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }

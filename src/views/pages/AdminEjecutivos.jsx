@@ -1,313 +1,220 @@
 /**
- * Personas — Rediseño Premium Creativo
- * Lógica: Admin crea y queda auto-asignado a su área; Super Admin ve todo y puede reasignar
+ * views/pages/AdminEjecutivos.jsx  (menú: "Personas")
+ * ─────────────────────────────────────────────────────────────────────────
+ * Alta, edición y baja de personas. El acceso (contraseña o Google) lo maneja
+ * Firebase Authentication: aquí solo se registra quién es la persona, su rol y
+ * su área; entra con el mismo correo con el que se registró.
+ *   · Super admin: ve y gestiona a todos.
+ *   · Admin: gestiona a su equipo y crea personas en las áreas que administra.
+ * Acepta ?editar=<id> (viene de "Mi equipo").
  */
-import { useState, useEffect, useMemo } from 'react';
-import { getEjs, saveEj, deleteEj, getUsersForAdmin } from '../../models/Ejecutivo';
-import { getCliCountForEj } from '../../models/Cliente';
-import { getInfCountForEj } from '../../models/Informe';
-import { getAreas } from '../../models/Workspace';
-import { getModuloConfig } from '../../models/ModuloConfig';
-import { MODULOS, ROLE_LABEL } from '../../models/constants';
+import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { DB } from '../../models/db';
+import { saveEj, deleteEj, canDeleteEj } from '../../models/Ejecutivo';
+import { getWorkspaces } from '../../models/Workspace';
+import { equipoIds } from '../../models/Alcance';
+import { MODULOS, ROLE_LABEL } from '../../models/constants';
+import { fmtNum, plural, iniciales } from '../../utils/format';
+import { useToast, useConfirm } from '../common/useToast';
+import PageHeader from '../common/PageHeader';
+import EmptyState from '../common/EmptyState';
 import Modal from '../common/Modal';
-import { useToast } from '../common/useToast';
+import { VerComoBtn } from '../common/ViewAs';
+
+const VACIO = { nom: '', email: '', zona: '', role: 'usuario', areaId: '', workspaceId: '', activo: true };
+const POR_PAGINA = 30;
 
 export default function AdminEjecutivos({ user }) {
   const toast = useToast();
-  const [modal, setModal] = useState(false);
+  const confirmar = useConfirm();
+  const [params, setParams] = useSearchParams();
+  const [, setVersion] = useState(0);
+  const refresh = () => setVersion(v => v + 1);
+  const [busca, setBusca] = useState('');
+  const [fArea, setFArea] = useState('');
+  const [fRol, setFRol] = useState('');
+  const [mostrar, setMostrar] = useState(POR_PAGINA);
+  const [form, setForm] = useState(null); // null = cerrado
   const [editId, setEditId] = useState(null);
-  const [search, setSearch] = useState('');
-  const [filtroArea, setFiltroArea] = useState('todos');
-  const [filtroRol, setFiltroRol] = useState('todos');
-  const [vista, setVista] = useState('cards');
-  const [list, setList] = useState([]);
-  const [areas, setAreas] = useState([]);
-  const [form, setForm] = useState({ nom: '', email: '', zona: '', role: 'usuario', areaId: '', workspaceId: 'w1', password: 'Proservis2026' });
-  const isSuper = user?.role === 'super_admin';
-  const isAdmin = user?.role === 'admin';
 
-  const refresh = () => {
-    const all = [...getEjs()];
-    // Admin solo ve su área, Super ve todo — forzamos nuevo array para re-render
-    const visible = isSuper ? all : isAdmin ? [...getUsersForAdmin(user.id)] : all.filter(u=> u.id===user.id);
-    const finalList = isSuper ? [...all] : visible.length? [...visible] : all.filter(u=> u.id===user.id);
-    setList(finalList);
-    setAreas([...getAreas()]);
+  const esSA = user.role === 'super_admin';
+  const ids = equipoIds(user);
+  const lista = DB.ejs.filter(e => ids.has(e.id) && (esSA || e.role !== 'super_admin'));
+  const workspaces = getWorkspaces();
+  // Áreas donde puede ubicar a alguien: todas (super admin) o las que administra / su propia área.
+  const areasPermitidas = esSA ? DB.areas : DB.areas.filter(a => a.adminId === user.id || a.id === user.areaId);
+
+  const abrirNuevo = () => {
+    const area = areasPermitidas[0];
+    setForm({ ...VACIO, areaId: area?.id || '', workspaceId: area?.workspaceId || user.workspaceId || workspaces[0]?.id || '' });
+    setEditId(null);
   };
-  useEffect(() => { refresh(); }, [user]);
-
-  const myArea = DB.areas.find(a=> a.id===user?.areaId);
-  const canChooseArea = isSuper;
-  const defaultAreaForNew = isAdmin && myArea ? myArea.id : (areas[0]?.id || 'a1');
-
-  const openNew = () => {
-    setForm({
-      nom: '', email: '', zona: '', role: 'usuario',
-      areaId: canChooseArea ? (areas[0]?.id || 'a1') : defaultAreaForNew,
-      workspaceId: user?.workspaceId || 'w1', password: 'Proservis2026'
-    });
-    setEditId(null); setModal(true);
-  };
-  const openEdit = (e) => {
-    setForm({
-      nom: e.nom, email: e.email || '', zona: e.zona || '', role: e.role || 'usuario',
-      areaId: e.areaId || defaultAreaForNew, workspaceId: e.workspaceId || 'w1', password: e.password || 'Proservis2026'
-    });
-    setEditId(e.id); setModal(true);
+  const abrirEditar = (e) => {
+    setForm({ nom: e.nom || '', email: e.email || '', zona: e.zona || '', role: e.role || 'usuario', areaId: e.areaId || '', workspaceId: e.workspaceId || '', activo: e.activo !== false });
+    setEditId(e.id);
   };
 
-  const handleSave = () => {
-    if (!form.nom.trim() || !form.email.trim()) { toast('Nombre y email son obligatorios Señor'); return; }
-    if (!form.email.includes('@')) { toast('Email no válido'); return; }
-    // Admin: forzar su área si intenta crear fuera
-    let finalForm = { ...form, id: editId };
-    if (!canChooseArea) {
-      finalForm.areaId = myArea?.id || defaultAreaForNew;
-      finalForm.workspaceId = user.workspaceId;
-      if (form.role === 'super_admin') { toast('Solo Super Admin puede crear Super Admin'); return; }
-    }
+  // Atajo desde "Mi equipo": ?editar=<id>
+  const editarParam = params.get('editar');
+  const [yaAbierto, setYaAbierto] = useState('');
+  if (editarParam && yaAbierto !== editarParam) {
+    const e = lista.find(x => x.id === editarParam);
+    setYaAbierto(editarParam);
+    if (e) abrirEditar(e);
+  }
+  const cerrar = () => { setForm(null); setEditId(null); if (params.get('editar')) { const n = new URLSearchParams(params); n.delete('editar'); setParams(n, { replace: true }); } };
+
+  const guardar = () => {
+    const nom = form.nom.trim();
+    const email = form.email.trim().toLowerCase();
+    if (!nom) { toast('Escribe el nombre de la persona.', 'error'); return; }
+    if (!/^\S+@\S+\.\S+$/.test(email)) { toast('Escribe un correo válido: con él entrará a la plataforma.', 'error'); return; }
+    if (!form.areaId) { toast('Elige el área de la persona.', 'error'); return; }
+    const area = DB.areas.find(a => a.id === form.areaId);
     try {
-      saveEj(finalForm, user);
-      refresh(); setModal(false); toast('Persona guardada Señor ✓');
-    } catch (e) { toast(e.message || 'Error'); }
-  };
-  const handleDelete = (id) => {
-    const target = getEjs().find(u=>u.id===id);
-    if (target?.role==='super_admin' && !isSuper) { toast('No puedes eliminar Super Admin'); return; }
-    if (confirm('¿Eliminar esta persona?')) { deleteEj(id); refresh(); toast('Eliminado'); }
+      saveEj({ ...form, nom, email, workspaceId: area?.workspaceId || form.workspaceId, id: editId || undefined }, user);
+      toast(editId ? 'Cambios guardados.' : `${nom} quedó registrada. Podrá entrar con ${email}.`, 'ok');
+      cerrar(); refresh();
+    } catch (e) { toast(e.message || 'No se pudo guardar.', 'error'); }
   };
 
-  const enriched = useMemo(()=> list.map(e=> {
-    const area = areas.find(a=>a.id===e.areaId);
-    const modulos = (()=> {
-      if (area?.modulos?.length) return area.modulos;
-      const cfg = getModuloConfig(e.id);
-      return Object.entries(cfg||{}).filter(([,v])=>v).map(([k])=>k);
-    })();
-    const nclis = getCliCountForEj(e.id);
-    const ninfs = getInfCountForEj(e.id);
-    return { e, area, modulos, nclis, ninfs };
-  }), [list, areas]);
+  const eliminar = async (e) => {
+    if (!canDeleteEj(user, e.id)) { toast(e.id === user.id ? 'No puedes eliminar tu propia cuenta.' : 'No tienes permiso para eliminar a esta persona.', 'error'); return; }
+    const nCli = DB.clis.filter(c => c.ejId === e.id).length;
+    const nAsig = DB.clis.filter(c => Object.values(c.asignaciones || {}).includes(e.id)).length;
+    const detalle = [nCli && `${plural(nCli, 'cliente')} quedará${nCli === 1 ? '' : 'n'} sin ejecutivo líder`, nAsig && `se le quitará de ${plural(nAsig, 'asignación', 'asignaciones')} por área`].filter(Boolean).join(' y ');
+    const ok = await confirmar({ title: `Eliminar a ${e.nom}`, message: (detalle ? `Al eliminarla, ${detalle}. ` : '') + 'Si solo quieres que no entre más, es mejor marcarla como inactiva. ¿Eliminar de todos modos?', confirmLabel: 'Eliminar', danger: true });
+    if (!ok) return;
+    deleteEj(e.id); refresh(); toast('Persona eliminada.', 'ok');
+  };
+  const alternarActivo = (e) => {
+    if (e.id === user.id) { toast('No puedes desactivar tu propia cuenta.', 'error'); return; }
+    saveEj({ ...e, activo: e.activo === false }, user); refresh();
+    toast(e.activo === false ? `${e.nom} está activa de nuevo.` : `${e.nom} ya no puede entrar.`, 'ok');
+  };
 
-  const filtered = useMemo(()=> {
-    // Deduplicate by e.id first (defensive against any duplicates in source)
-    const seen = new Set();
-    const unique = enriched.filter(({e}) => {
-      if (seen.has(e.id)) return false;
-      seen.add(e.id);
-      return true;
-    });
-    let l = unique.filter(({e})=> !search || e.nom.toLowerCase().includes(search.toLowerCase()) || (e.email||'').toLowerCase().includes(search.toLowerCase()) || (e.zona||'').toLowerCase().includes(search.toLowerCase()));
-    if (filtroArea!=='todos') {
-      const areaNorm = String(filtroArea).toLowerCase();
-      l = l.filter(({e})=> String(e.areaId||'').toLowerCase()===areaNorm);
-    }
-    if (filtroRol!=='todos') {
-      const rolNorm = String(filtroRol).toLowerCase().replace(/\s+/g,'_');
-      l = l.filter(({e})=> String(e.role||'').toLowerCase()===rolNorm);
-    }
-    return l;
-  }, [enriched, search, filtroArea, filtroRol]);
+  const filas = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return lista
+      .filter(e => !q || (e.nom + ' ' + (e.email || '') + ' ' + (e.zona || '')).toLowerCase().includes(q))
+      .filter(e => !fArea || e.areaId === fArea)
+      .filter(e => !fRol || e.role === fRol)
+      .sort((a, b) => a.nom.localeCompare(b.nom));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lista.length, busca, fArea, fRol, DB.ejs]);
 
-  const stats = useMemo(()=> {
-    const total = enriched.length;
-    const porArea = areas.map(a=> ({ id:a.id, nombre:a.nombre, color:a.color, count: enriched.filter(x=> x.e.areaId===a.id).length }));
-    const sinArea = enriched.filter(x=> !x.e.areaId).length;
-    return { total, porArea, sinArea };
-  }, [enriched, areas]);
+  const areaDe = (id) => DB.areas.find(a => a.id === id);
+  const areaForm = areaDe(form?.areaId);
+  const ocupantes = (areaId) => lista.filter(e => e.areaId === areaId).length;
 
   return (
     <div>
-      {/* Header */}
-      <div style={{background:'linear-gradient(135deg,#0F1F2E 0%, #1A3A2A 45%, #12212D 100%)', borderRadius:16, padding:'18px 20px', color:'#fff', position:'relative', overflow:'hidden', marginBottom:14}}>
-        <div style={{position:'absolute', top:-24, right:40, width:160, height:160, background:'rgba(232,187,38,.12)', borderRadius:'50%'}} />
-        <div style={{position:'absolute', bottom:-20, left:-30, width:120, height:120, background:'rgba(255,255,255,.06)', borderRadius:'50%'}} />
-        <div style={{position:'relative'}}>
-          <div style={{display:'flex', justifyContent:'space-between', alignItems:'start', flexWrap:'wrap', gap:12}}>
-            <div>
-              <div style={{fontSize:18, fontWeight:900, display:'flex', alignItems:'center', gap:8}}>Personas <span style={{background:'rgba(255,255,255,.12)', padding:'4px 10px', borderRadius:20, fontSize:11, border:'1px solid rgba(255,255,255,.18)'}}>{stats.total} personas</span> {isAdmin && !isSuper && <span style={{background:'#E8BB26', color:'#12212D', padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:800}}>Tu área: {myArea?.nombre}</span>}</div>
-              <div style={{fontSize:11, opacity:.8, marginTop:4}}>
-                {isSuper ? 'Ves todas las áreas — puedes reasignar si quedó mal creado' : `Ves solo ${myArea?.nombre || 'tu área'} — al crear, queda automáticamente en tu área`}
-              </div>
-            </div>
-            <button onClick={openNew} style={{background:'linear-gradient(135deg,#E8BB26,#F5D76E)', color:'#12212D', fontWeight:900, padding:'10px 16px', borderRadius:12, border:'none', boxShadow:'0 4px 12px rgba(232,187,38,.25)', display:'flex', gap:6, alignItems:'center', cursor:'pointer'}}>
-              <span style={{width:20, height:20, borderRadius:'50%', background:'#12212D', color:'#E8BB26', display:'grid', placeItems:'center', fontSize:12}}>+</span> Nueva Persona {isAdmin && !isSuper ? `en ${myArea?.nombre}` : ''}
-            </button>
-          </div>
-          <div style={{display:'grid', gridTemplateColumns:`repeat(${Math.min(areas.length,4)},1fr)`, gap:8, marginTop:14}}>
-            {stats.porArea.slice(0,4).map(a=> (
-              <div key={a.id} style={{background: a.count? 'rgba(255,255,255,.10)':'rgba(255,255,255,.06)', border:'1px solid rgba(255,255,255,.12)', borderRadius:12, padding:'10px 12px', borderLeft:`3px solid ${a.color || '#E8BB26'}`}}>
-                <div style={{fontSize:10, opacity:.7, fontWeight:700, textTransform:'uppercase'}}>{a.nombre}</div>
-                <div style={{fontSize:18, fontWeight:900}}>{a.count}</div>
-                <div style={{fontSize:10, opacity:.65}}>{a.count===1?'persona':'personas'}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+      <PageHeader title="Personas"
+        subtitle={esSA ? 'Registra a quien trabaja en la plataforma: su rol y su área. Entra con el mismo correo con el que lo registres.' : 'Registra y administra a las personas de tus áreas. Entran con el mismo correo con el que las registres.'}
+        actions={<button type="button" className="btn bvd" onClick={abrirNuevo} disabled={!areasPermitidas.length}>+ Nueva persona</button>} />
+
+      <div className="kgrid">
+        <div className="kpi"><div className="kl">Personas</div><div className="kv">{fmtNum(lista.length)}</div><div className="ks">{fmtNum(lista.filter(e => e.activo !== false).length)} activas</div></div>
+        {areasPermitidas.slice(0, 3).map(a => (
+          <div key={a.id} className="kpi" style={{ borderLeftColor: a.color }}><div className="kl">{a.nombre}</div><div className="kv">{fmtNum(ocupantes(a.id))}</div><div className="ks">{ocupantes(a.id) === 1 ? 'persona' : 'personas'}</div></div>
+        ))}
       </div>
 
-      {/* Filtros */}
-      <div style={{display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', background:'rgba(255,255,255,.9)', backdropFilter:'blur(8px)', border:'1px solid #E6EBE6', borderRadius:14, padding:'12px 14px', position:'sticky', top:8, zIndex:2, boxShadow:'0 4px 12px rgba(0,0,0,.04)'}}>
-        <div style={{position:'relative', flex:1, minWidth:220}}>
-          <span style={{position:'absolute', left:12, top:9, color:'var(--grt)'}}>🔍</span>
-          <input type="text" placeholder="Buscar por nombre, email o zona..." value={search} onChange={e=> setSearch(e.target.value)} style={{width:'100%', height:36, borderRadius:10, border:'1px solid #E6EBE6', background:'#F8FAF8', padding:'0 12px 0 34px', fontSize:13, outline:'none'}} />
-        </div>
-        <select value={filtroArea} onChange={e=> setFiltroArea(e.target.value)} style={{height:36, borderRadius:10, border:'1px solid #E6EBE6', background:'#fff', padding:'0 10px', fontSize:12, fontWeight:600}}>
-          <option value="todos">Todas las áreas ({stats.total})</option>
-          {areas.map(a=> <option key={a.id} value={a.id}>{a.nombre} ({stats.porArea.find(x=>x.id===a.id)?.count||0})</option>)}
+      <div className="toolbar">
+        <input className="finput grow" type="search" placeholder="Buscar por nombre, correo o zona…" value={busca} onChange={e => { setBusca(e.target.value); setMostrar(POR_PAGINA); }} aria-label="Buscar personas" />
+        <select className="finput" style={{ width: 'auto' }} value={fArea} onChange={e => setFArea(e.target.value)} aria-label="Filtrar por área">
+          <option value="">Todas las áreas</option>
+          {DB.areas.filter(a => lista.some(e => e.areaId === a.id)).map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
         </select>
-        <select value={filtroRol} onChange={e=> setFiltroRol(e.target.value)} style={{height:36, borderRadius:10, border:'1px solid #E6EBE6', background:'#fff', padding:'0 10px', fontSize:12, fontWeight:600}}>
-          <option value="todos">Todos los roles</option>
-          <option value="usuario">Usuario</option>
-          <option value="admin">Administrador</option>
-          {isSuper && <option value="super_admin">Super Admin</option>}
+        <select className="finput" style={{ width: 'auto' }} value={fRol} onChange={e => setFRol(e.target.value)} aria-label="Filtrar por rol">
+          <option value="">Todos los roles</option>
+          <option value="usuario">{ROLE_LABEL.usuario}</option>
+          <option value="admin">{ROLE_LABEL.admin}</option>
+          {esSA && <option value="super_admin">{ROLE_LABEL.super_admin}</option>}
         </select>
-        <div style={{display:'flex', background:'#F2F4F2', borderRadius:10, padding:3, border:'1px solid #E6EBE6'}}>
-          <button onClick={()=> setVista('cards')} style={{background: vista==='cards'?'#fff':'transparent', border:'1px solid '+(vista==='cards'?'#E6EBE6':'transparent'), padding:'6px 12px', borderRadius:8, fontSize:12, fontWeight:700}}>⊞ Cards</button>
-          <button onClick={()=> setVista('table')} style={{background: vista==='table'?'#fff':'transparent', border:'1px solid '+(vista==='table'?'#E6EBE6':'transparent'), padding:'6px 12px', borderRadius:8, fontSize:12, fontWeight:700}}>☰ Tabla</button>
-        </div>
+        {(busca || fArea || fRol) && <button type="button" className="btn bgh bsm" onClick={() => { setBusca(''); setFArea(''); setFRol(''); }}>Limpiar</button>}
+        <span className="count">{filas.length} de {lista.length}</span>
       </div>
 
-      {vista==='cards' ? (
-        <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(300px,1fr))', gap:12, marginTop:14}}>
-          {filtered.map(({e, area, modulos, nclis, ninfs}) => {
-            const color = area?.color || '#E6EBE6';
-            const pct = nclis? Math.min(100, Math.round(ninfs/nclis*100)):0;
-            return (
-              <div key={e.id} style={{background:'#fff', border:'1px solid #E6EBE6', borderRadius:14, padding:14, boxShadow:'0 2px 8px rgba(0,0,0,.04)', borderTop:`3px solid ${color}`, position:'relative', overflow:'hidden', transition:'transform .2s, box-shadow .2s'}} onMouseEnter={el=>{el.currentTarget.style.transform='translateY(-3px)'; el.currentTarget.style.boxShadow='0 8px 20px rgba(0,0,0,.08)'}} onMouseLeave={el=>{el.currentTarget.style.transform=''; el.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,.04)'}}>
-                <div style={{position:'absolute', top:-20, right:-20, width:80, height:80, background: color, opacity:.06, borderRadius:'50%'}} />
-                <div style={{display:'flex', gap:10, alignItems:'start', position:'relative'}}>
-                  <div style={{width:44, height:44, borderRadius:10, background: `linear-gradient(135deg, ${color}18, ${color}08)`, border:`1px solid ${color}30`, display:'flex', alignItems:'center', justifyContent:'center', fontWeight:900, color: color, flexShrink:0}}>{e.nom.slice(0,2).toUpperCase()}</div>
-                  <div style={{flex:1, minWidth:0}}>
-                    <div style={{fontWeight:800, fontSize:13, color:'#0F1F2E', display:'flex', alignItems:'center', gap:6}}>{e.nom} {!e.activo && <span style={{fontSize:9, background:'#FFF5F5', color:'#8B1A1A', padding:'2px 6px', borderRadius:20, border:'1px solid #F5C6CB'}}>Inactivo</span>}</div>
-                    <div style={{fontSize:11, color:'var(--grt)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{e.email}</div>
-                    <div style={{display:'flex', gap:4, marginTop:6, flexWrap:'wrap'}}>
-                      <span style={{fontSize:9, padding:'3px 7px', borderRadius:20, background: e.role==='super_admin'?'#12212D': e.role==='admin'?'#E8F5EE':'#FDF6D8', color: e.role==='super_admin'?'#fff': e.role==='admin'?'#0F6B33':'#7A6010', fontWeight:700, border:'1px solid #E6EBE6'}}>{ROLE_LABEL[e.role]}</span>
-                      <span style={{fontSize:9, padding:'3px 7px', borderRadius:20, background: color, color:'#fff', fontWeight:700}}>{area?.nombre || 'Sin área'}</span>
-                    </div>
-                  </div>
-                  <span style={{fontSize:10, background:'#F2F4F2', padding:'4px 8px', borderRadius:20, border:'1px solid #E6EBE6', fontWeight:700, color:'var(--grt)'}}>{e.zona || '—'}</span>
-                </div>
-
-                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:12}}>
-                  <div style={{background:'#F8FAF8', border:'1px solid #F0F0F0', borderRadius:10, padding:'8px 10px', textAlign:'center'}}>
-                    <div style={{fontSize:16, fontWeight:900, color:'#0F6B33'}}>{nclis}</div>
-                    <div style={{fontSize:9, color:'var(--grt)', fontWeight:700, textTransform:'uppercase'}}>Clientes</div>
-                    <div style={{height:3, background:'#E6EBE6', borderRadius:10, marginTop:6, overflow:'hidden'}}><div style={{width: Math.min(100, nclis*10)+'%', height:'100%', background: color, borderRadius:10}} /></div>
-                  </div>
-                  <div style={{background:'#FFFEF5', border:'1px solid #FFE082', borderRadius:10, padding:'8px 10px', textAlign:'center'}}>
-                    <div style={{fontSize:16, fontWeight:900, color:'#B77900'}}>{ninfs}</div>
-                    <div style={{fontSize:9, color:'var(--grt)', fontWeight:700, textTransform:'uppercase'}}>Informes</div>
-                    <div style={{fontSize:10, fontWeight:800, color: pct===100?'#0F6B33': pct>=50?'#7A6010':'#8B1A1A', marginTop:2}}>{pct}%</div>
-                  </div>
-                </div>
-
-                <div style={{marginTop:10, background:'#FBFDFB', border:'1px solid #F0F0F0', borderRadius:10, padding:'8px 10px'}}>
-                  <div style={{fontSize:9, color:'var(--grt)', fontWeight:700, textTransform:'uppercase', letterSpacing:.04+'em'}}>Módulos</div>
-                  <div style={{display:'flex', gap:4, flexWrap:'wrap', marginTop:6}}>
-                    {(modulos.length? modulos.slice(0,4): ['sin módulos']).map(m=> {
-                      const mod = MODULOS.find(x=>x.id===m);
-                      return <span key={m} style={{fontSize:10, background:'#fff', border:'1px solid #E6EBE6', padding:'3px 7px', borderRadius:20, display:'flex', gap:4, alignItems:'center'}}>{mod?.icon||'•'} {mod?.label||m}</span>
-                    })}
-                    {modulos.length>4 && <span style={{fontSize:10, color:'var(--grt)'}}>+{modulos.length-4}</span>}
-                  </div>
-                </div>
-
-                <div style={{display:'flex', gap:6, marginTop:12}}>
-                  <button onClick={()=> openEdit(e)} style={{flex:1, background:'#fff', border:'1px solid #E6EBE6', borderRadius:10, padding:'8px 10px', fontSize:12, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', gap:6, cursor:'pointer'}}>
-                    <span style={{width:18, height:18, borderRadius:'50%', background:'#FFF8E1', border:'1px solid #FFE082', display:'grid', placeItems:'center', fontSize:10}}>✎</span> Editar
-                  </button>
-                  <button onClick={()=> handleDelete(e.id)} style={{width:36, height:36, borderRadius:10, background:'#FFF5F5', border:'1px solid #F5C6CB', display:'grid', placeItems:'center', cursor:'pointer', color:'#C0392B'}}>🗑️</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      {!filas.length ? (
+        <EmptyState icon="👥" title={lista.length ? 'Nadie coincide con los filtros' : 'Aún no hay personas'}
+          action={!lista.length && areasPermitidas.length ? <button type="button" className="btn bvd" onClick={abrirNuevo}>Registrar la primera persona</button> : null}>
+          {lista.length ? 'Prueba con otra búsqueda.' : 'Registra a tu equipo para poder asignarles clientes.'}
+        </EmptyState>
       ) : (
-        <div style={{background:'#fff', border:'1px solid #E6EBE6', borderRadius:14, overflow:'hidden', marginTop:14}}>
-          <table className="tbl" style={{margin:0}}>
-            <thead><tr><th>Persona</th><th>Área</th><th>Rol</th><th>Zona</th><th>Clientes</th><th>Informes</th><th>Módulos</th><th>Acciones</th></tr></thead>
+        <div className="tbl-wrap">
+          <table className="tbl">
+            <thead><tr><th>Persona</th><th>Área</th><th>Rol</th><th>Zona</th><th className="num">Clientes</th><th>Estado</th><th>Acciones</th></tr></thead>
             <tbody>
-              {filtered.map(({e, area, modulos, nclis, ninfs})=> (
-                <tr key={e.id}>
-                  <td><div style={{display:'flex', gap:8, alignItems:'center'}}><div style={{width:28, height:28, borderRadius:8, background: area?.color || '#E6EBE6', color:'#fff', display:'grid', placeItems:'center', fontWeight:800, fontSize:11}}>{e.nom.slice(0,2).toUpperCase()}</div><div><div style={{fontWeight:700, fontSize:12}}>{e.nom}</div><div style={{fontSize:11, color:'var(--grt)'}}>{e.email}</div></div></div></td>
-                  <td><span style={{background: area?.color || '#E6EBE6', color:'#fff', padding:'3px 8px', borderRadius:20, fontSize:11, fontWeight:700}}>{area?.nombre || '—'}</span></td>
-                  <td><span style={{background: e.role==='super_admin'?'#12212D': e.role==='admin'?'#E8F5EE':'#FDF6D8', color: e.role==='super_admin'?'#fff': e.role==='admin'?'#0F6B33':'#7A6010', padding:'3px 7px', borderRadius:20, fontSize:11, fontWeight:700}}>{ROLE_LABEL[e.role]}</span></td>
-                  <td>{e.zona||'—'}</td>
-                  <td><span className="b bok">{nclis}</span></td>
-                  <td><span className="b bwn">{ninfs}</span></td>
-                  <td style={{fontSize:10, maxWidth:160}}>{modulos.slice(0,2).map(m=> MODULOS.find(x=>x.id===m)?.label || m).join(', ') || '—'}</td>
-                  <td><button className="btn bgh bsm" onClick={()=> openEdit(e)}>✏️</button> <button className="btn bro bsm" onClick={()=> handleDelete(e.id)}>🗑️</button></td>
-                </tr>
-              ))}
+              {filas.slice(0, mostrar).map(e => {
+                const a = areaDe(e.areaId);
+                const nCli = DB.clis.filter(c => c.ejId === e.id).length;
+                return (
+                  <tr key={e.id} className={e.activo === false ? 'row-off' : ''}>
+                    <td><div className="person"><span className="person-av" style={{ background: a?.color || 'var(--grt)' }}>{iniciales(e.nom)}</span><div><div className="person-n">{e.nom}{e.id === user.id && <span className="chip" style={{ marginLeft: 6 }}>Tú</span>}</div><div className="person-m">{e.email}</div></div></div></td>
+                    <td>{a ? <span className="chip" style={{ background: a.color, color: '#fff', borderColor: a.color }}>{a.nombre}</span> : <span className="text-muted">Sin área</span>}</td>
+                    <td>{ROLE_LABEL[e.role] || e.role}</td>
+                    <td>{e.zona || '—'}</td>
+                    <td className="num">{fmtNum(nCli)}</td>
+                    <td><span className={'chip ' + (e.activo === false ? 'ro' : 'vd')}>{e.activo === false ? 'Inactiva' : 'Activa'}</span></td>
+                    <td>
+                      <div className="row-acts">
+                        <VerComoBtn persona={e} actualId={user.id} />
+                        <button type="button" className="btn bgh bsm" onClick={() => abrirEditar(e)}>Editar</button>
+                        <button type="button" className="btn bgh bsm" onClick={() => alternarActivo(e)} disabled={e.id === user.id}>{e.activo === false ? 'Activar' : 'Desactivar'}</button>
+                        <button type="button" className="btn bro bsm" onClick={() => eliminar(e)} disabled={!canDeleteEj(user, e.id)}>Eliminar</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
+      {filas.length > mostrar && <div style={{ textAlign: 'center', marginTop: 12 }}><button type="button" className="btn bgh" onClick={() => setMostrar(m => m + POR_PAGINA)}>Ver {Math.min(POR_PAGINA, filas.length - mostrar)} más</button></div>}
 
-      <Modal open={modal} onClose={() => setModal(false)} title={editId ? 'Editar Persona' : `Nueva Persona ${!canChooseArea ? `en ${myArea?.nombre}` : ''}`}>
-        {!canChooseArea && (
-          <div style={{background:'#E8F5EE', border:'1px solid #C8E6D4', borderRadius:10, padding:'10px 12px', marginBottom:12, display:'flex', gap:8, alignItems:'center'}}>
-            <span style={{width:28, height:28, borderRadius:8, background: myArea?.color || '#168A43', color:'#fff', display:'grid', placeItems:'center', fontWeight:800}}>{myArea?.nombre?.slice(0,1) || 'A'}</span>
-            <div>
-              <div style={{fontWeight:800, fontSize:12, color:'#0F6B33'}}>Se creará en tu área: {myArea?.nombre}</div>
-              <div style={{fontSize:11, color:'var(--grt)'}}>Quedará automáticamente asignado a {myArea?.nombre} — no puedes cambiarlo</div>
+      <Modal open={!!form} onClose={cerrar} title={editId ? 'Editar persona' : 'Nueva persona'}>
+        {form && (
+          <>
+            <div className="fg2">
+              <div><label className="flabel" htmlFor="p-nom">Nombre *</label><input id="p-nom" className="finput" value={form.nom} onChange={e => setForm({ ...form, nom: e.target.value })} placeholder="Ej. Laura Gómez" autoFocus /></div>
+              <div><label className="flabel" htmlFor="p-mail">Correo *</label><input id="p-mail" className="finput" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="nombre@proservis.com.co" /></div>
             </div>
-          </div>
+            <div className="fg2">
+              <div><label className="flabel" htmlFor="p-rol">Rol *</label>
+                <select id="p-rol" className="finput" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+                  <option value="usuario">Usuario: aporta datos o lidera informes</option>
+                  <option value="admin">Administrador: supervisa a su equipo</option>
+                  {esSA && <option value="super_admin">Super admin: administra todo</option>}
+                </select>
+              </div>
+              <div><label className="flabel" htmlFor="p-zona">Zona o ciudad</label><input id="p-zona" className="finput" value={form.zona} onChange={e => setForm({ ...form, zona: e.target.value })} placeholder="Ej. Cali" /></div>
+            </div>
+            <div className="fg2">
+              <div><label className="flabel" htmlFor="p-area">Área *</label>
+                <select id="p-area" className="finput" value={form.areaId} onChange={e => setForm({ ...form, areaId: e.target.value })}>
+                  <option value="">— Elige un área —</option>
+                  {areasPermitidas.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                </select>
+              </div>
+              <div><label className="flabel" htmlFor="p-act">Estado</label>
+                <select id="p-act" className="finput" value={form.activo ? '1' : '0'} onChange={e => setForm({ ...form, activo: e.target.value === '1' })}>
+                  <option value="1">Activa: puede entrar</option><option value="0">Inactiva: no puede entrar</option>
+                </select>
+              </div>
+            </div>
+            {areaForm && (
+              <div className="alrt avd" style={{ marginTop: 10 }}>
+                <strong>{areaForm.nombre}</strong>{(areaForm.modulos || []).length ? ': aportará ' : ': esta área no tiene módulos propios.'}
+                {(areaForm.modulos || []).map(id => MODULOS.find(m => m.id === id)?.label || id).join(', ')}
+              </div>
+            )}
+            <div className="alrt aam" style={{ marginTop: 10 }}>No se guardan contraseñas aquí. La persona entra con <strong>Google</strong> usando este mismo correo, o con correo y contraseña si ya tiene cuenta en Firebase Authentication.</div>
+            <div className="brow"><button type="button" className="btn bvd" onClick={guardar}>{editId ? 'Guardar cambios' : 'Registrar persona'}</button><button type="button" className="btn bgh" onClick={cerrar}>Cancelar</button></div>
+          </>
         )}
-        <div className="fg2">
-          <div><label className="flabel">Nombre *</label><input className="finput" value={form.nom} onChange={e => setForm({ ...form, nom: e.target.value })} placeholder="Ej: Laura Gómez" /></div>
-          <div><label className="flabel">Email *</label><input className="finput" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="nombre@proservis.co" /></div>
-        </div>
-        <div className="fg2">
-          <div><label className="flabel">Rol *</label>
-            <select className="finput" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
-              <option value="usuario">Usuario — genera reportes</option>
-              <option value="admin">Administrador — jefe de área</option>
-              {isSuper && <option value="super_admin">Super Admin — crea áreas</option>}
-            </select>
-          </div>
-          <div><label className="flabel">Zona / Ciudad</label><input className="finput" value={form.zona} onChange={e => setForm({ ...form, zona: e.target.value })} placeholder="Bucaramanga" /></div>
-        </div>
-        <div className="fg2">
-          <div><label className="flabel">Espacio</label>
-            <select className="finput" value={form.workspaceId} onChange={e => setForm({ ...form, workspaceId: e.target.value })} disabled={!canChooseArea}>
-              {areas.filter(a=> !a.workspaceId || a.workspaceId===form.workspaceId).length? null: null}
-              {[...new Set(areas.map(a=>a.workspaceId))].map(wsId=> {
-                const wsName = wsId==='w1'?'Proservis Temporales':'Proservis Outsourcing';
-                return <option key={wsId} value={wsId}>{wsName}</option>
-              })}
-            </select>
-          </div>
-          <div><label className="flabel">Área {canChooseArea? '':' (auto)'} </label>
-            <select className="finput" value={form.areaId} onChange={e => setForm({ ...form, areaId: e.target.value })} disabled={!canChooseArea} style={{background: !canChooseArea?'#F2F4F2':'#fff'}}>
-              {areas.filter(a => canChooseArea || a.id===myArea?.id).map(a => <option key={a.id} value={a.id}>{a.nombre} — {a.modulos?.slice(0,2).join(', ')}</option>)}
-            </select>
-            {!canChooseArea && <div style={{fontSize:10, color:'var(--grt)', marginTop:4}}>Super Admin puede cambiarlo después si quedó mal</div>}
-            {canChooseArea && <div style={{fontSize:10, color:'var(--grt)', marginTop:4}}>Como Super Admin puedes moverla a cualquier área</div>}
-          </div>
-        </div>
-        <div className="fg2">
-          <div><label className="flabel">Contraseña</label><input className="finput" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="Proservis2026" /></div>
-          <div><label className="flabel">Estado</label>
-            <select className="finput" value={form.activo ? '1' : '0'} onChange={e => setForm({ ...form, activo: e.target.value === '1' })}>
-              <option value="1">Activo</option>
-              <option value="0">Inactivo</option>
-            </select>
-          </div>
-        </div>
-        <div style={{background:'#FBFDFB', border:'1px solid #E6EBE6', borderRadius:10, padding:10, marginTop:12}}>
-          <div style={{fontSize:11, fontWeight:800, color:'var(--vd)', marginBottom:6}}>Panorama de módulos (tendrá acceso a)</div>
-          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
-            {(areas.find(a=>a.id===form.areaId)?.modulos || []).map(mid=> {
-              const m = MODULOS.find(x=>x.id===mid);
-              return <span key={mid} style={{fontSize:11, background:'#E8F5EE', border:'1px solid #C8E6D4', padding:'4px 8px', borderRadius:20, display:'flex', gap:4, alignItems:'center'}}>{m?.icon} {m?.label}</span>
-            })}
-            {!(areas.find(a=>a.id===form.areaId)?.modulos?.length) && <span style={{fontSize:11, color:'var(--grt)'}}>Sin módulos asignados a esta área</span>}
-          </div>
-        </div>
-        <div className="brow"><button className="btn bvd" onClick={handleSave}>Guardar</button><button className="btn bgh" onClick={() => setModal(false)}>Cancelar</button></div>
       </Modal>
     </div>
   );

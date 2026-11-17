@@ -21,3 +21,15 @@ export const APP_CONFIG = {
   appName: 'Informe PT - Proservis',
   supportEmail: 'admin@proservis.com.co',
 };
+
+/** Enlace opcional a SortTime Plus (fuente complementaria de ausentismo). Vacío = no se muestra. */
+export const SORTTIME_URL = import.meta.env.VITE_SORTTIME_URL || '';
+
+/** Permiso para que Gmail deje un borrador listo con el informe adjunto (solo crea borradores; no lee ni envía). */
+export const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
+
+/**
+ * Si es true (por defecto), el ejecutivo solo puede enviar por correo los informes que un administrador aprobó.
+ * Para quitar la exigencia: VITE_EXIGIR_APROBACION=false
+ */
+export const EXIGIR_APROBACION = String(import.meta.env.VITE_EXIGIR_APROBACION ?? 'true') !== 'false';

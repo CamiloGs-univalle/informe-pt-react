@@ -1,22 +1,21 @@
 /**
  * views/pages/dashboard/InsightBanner.jsx
  * ─────────────────────────────────────────────────────────────────────────
- * Una sola línea, coloreada por estado, con la lectura más relevante del
- * momento — para que la persona no tenga que escanear cada KPI para saber
- * si algo necesita su atención ahora mismo. La lógica de qué mensaje mostrar
- * vive en `insight.js` (computeInsight); este archivo solo renderiza.
+ * Una línea, coloreada por estado, con lo más importante del momento y —si
+ * aplica— un botón que lleva directo a resolverlo. La lógica del mensaje
+ * vive en `insight.js`.
  */
-const TONE = {
-  good: { cls: 'avd', icon: '✅' },
-  warn: { cls: 'aam', icon: '⚠️' },
-  bad: { cls: 'aro', icon: '🔴' },
-};
+import { Link } from 'react-router-dom';
+
+const TONE = { good: 'avd', warn: 'aam', bad: 'aro' };
+const ICON = { good: '✓', warn: '!', bad: '!' };
 
 export default function InsightBanner({ insight }) {
-  const t = TONE[insight.tone];
   return (
-    <div className={'alrt ' + t.cls} style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
-      <span>{t.icon}</span><span>{insight.text}</span>
+    <div className={'alrt insight ' + TONE[insight.tone]} role="status">
+      <span className="insight-ico" aria-hidden="true">{ICON[insight.tone]}</span>
+      <span className="insight-txt">{insight.text}</span>
+      {insight.to && <Link to={insight.to} className="btn bgh bsm">{insight.cta || 'Ver'}</Link>}
     </div>
   );
 }

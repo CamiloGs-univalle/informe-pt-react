@@ -34,13 +34,12 @@ La app funciona sin configuración adicional (usa los valores por defecto del pr
 `reportes-pt-ejecutivos`). Para sobreescribirlos, copia `.env.example` a `.env.local` — ver
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-**Accesos demo** (visibles también en la propia pantalla de login):
-
-| Rol | Email | Contraseña |
-|---|---|---|
-| Super Admin | `camilo.garcia@proservis.co` | `Proservis2026` |
-| Administrador | `agomez@proservis.co` | `Proservis2026` |
-| Usuario | `dperez@proservis.co` | `Proservis2026` |
+**Acceso.** Firebase Authentication es la única fuente de credenciales: no hay contraseñas ni
+cuentas de prueba guardadas en la base de datos ni en el código. Una persona entra con Google o con
+correo y contraseña **solo si su correo está registrado en «Personas»** (Firestore, colección
+`ejecutivos`) y está activa. Para dar acceso a alguien nuevo: registrarla en «Personas» (o por carga
+masiva en «Datos y cargas») y asegurarse de que tenga cuenta en Firebase Authentication con el mismo
+correo (entrar con Google la crea sola).
 
 ## Documentación
 

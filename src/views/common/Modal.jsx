@@ -1,20 +1,28 @@
 /**
  * views/common/Modal.jsx
  * ─────────────────────────────────────────────────────────────────────────
- * Generic modal dialog shell used by the admin CRUD pages
- * (AdminClientes, AdminEjecutivos, EquipoAdmin, SuperAdmin).
+ * Diálogo modal estándar: se cierra con Esc, con clic fuera o con ×, bloquea
+ * el scroll del fondo y devuelve el foco. Lo usan todas las pantallas de
+ * administración.
  */
+import { useEffect } from 'react';
+
 export default function Modal({ open, onClose, title, children, wide }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
-    <div className="mover on" onClick={onClose}>
-      <div
-        className="mdl"
-        style={wide ? { maxWidth: '700px' } : undefined}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button className="mclose" onClick={onClose}>✕</button>
-        {title && <h3 className="ct">{title}</h3>}
+    <div className="mover on" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }} role="presentation">
+      <div className="mdl" role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} style={wide ? { maxWidth: 940 } : undefined}>
+        <button type="button" className="mclose" onClick={onClose} aria-label="Cerrar">×</button>
+        {title && <h3 className="mdl-title">{title}</h3>}
         {children}
       </div>
     </div>

@@ -36,7 +36,7 @@ src/
 │   │   └── nuevo-informe/   Subcomponentes del wizard "Nuevo informe" (uno por paso)
 │   ├── layout/            Shell de la app autenticada (header + sidebar + <Outlet/>)
 │   └── common/            Componentes reutilizables (Modal, Toast, DriveExplorer)
-├── routes/            Definición de rutas + guard de roles (RequireRole)
+├── routes/            Definición de rutas + guard por capacidad (RequireCap)
 ├── config/            Configuración de Firebase y variables de la app (Google Client ID, etc.)
 ├── utils/             Helpers puros sin estado (formato de fechas y periodos)
 ├── assets/            Logos (base64) y hoja de estilos global
@@ -104,7 +104,7 @@ modelos/servicios/controladores).
 ### Rutas (`routes/`)
 
 `AppRoutes.jsx` declara el árbol de rutas (con `react-router-dom`, modo `HashRouter` — ver
-[`DEPLOYMENT.md`](./DEPLOYMENT.md) sobre por qué). `RequireRole.jsx` es el guard que redirige o
+[`DEPLOYMENT.md`](./DEPLOYMENT.md) sobre por qué). `RequireCap.jsx` es el guard que redirige o
 muestra "acceso restringido" según el rol del usuario.
 
 ## 3. Diagrama de dependencias
@@ -126,15 +126,14 @@ graph TD
 
 ## 4. Flujo de ejemplo: iniciar sesión
 
-1. `views/pages/Login.jsx` recoge email/password y llama a
-   `controllers/authController.loginWithEmailPassword(email, password)`.
-2. El controlador intenta `signInWithEmailAndPassword` (Firebase). Si funciona, enriquece el
-   usuario de Firebase con el perfil local (rol, workspace) vía `models/Ejecutivo.getUserByEmail`.
-3. Si Firebase falla (sin conexión, credenciales no creadas allí, etc.), el controlador cae a
-   `models/Ejecutivo.authenticateLocal(email, password)` — el modo "demo" sin backend.
-4. El controlador devuelve `{ user }` o `{ error }`; la vista solo actualiza su estado y llama a
-   `onLogin(...)` (manejado en `App.jsx`, que guarda la sesión con
-   `models/Ejecutivo.setCurrentUser`).
+1. `views/pages/Login.jsx` ofrece «Continuar con Google» o correo + contraseña y llama a
+   `controllers/authController` (`loginWithGoogle` / `loginWithEmailPassword`). Solo autentica con
+   Firebase Authentication; no hay contraseñas guardadas en la base de datos.
+2. `App.jsx` escucha el estado de Firebase Auth. Con sesión, carga Firestore desde el servidor
+   (`loadDB({ force: true })`) y busca el perfil por correo (`models/Ejecutivo.getUserByEmail`).
+3. Si el correo no está registrado en «Personas» o la persona está inactiva, se cierra la sesión y
+   se explica por qué. Si todo está bien, se habilita la sincronización y se muestra la app.
+4. El super admin puede «Ver como» otra persona (`viewAs` en `App.jsx`).
 
 ## 5. Flujo de ejemplo: generar un informe (modo automático)
 
@@ -170,13 +169,10 @@ documentados aquí; una segunda pasada de limpieza (también septiembre 2026, ve
 [`CHANGELOG.md`](../CHANGELOG.md)) resolvió la mayoría. Lo que queda pendiente, para que el
 equipo decida cuándo abordarlo:
 
-1. **Contraseñas en texto plano en `localStorage`.** El fallback de autenticación local
-   (`models/Ejecutivo.js#authenticateLocal`) sigue comparando contraseñas en texto plano
-   (aceptable para una demo sin datos reales, pero no para producción). Lo que **sí** se corrigió
-   en la segunda pasada: ya no existe una contraseña "comodín" que autenticara como *cualquier*
-   usuario — ahora solo la contraseña real guardada de cada Ejecutivo funciona. Antes de un
-   despliegue con datos reales de clientes: hashear las contraseñas si se sigue usando auth local,
-   y/o exigir que todo login pase por Firebase Authentication.
+1. **Reglas de Firestore y permisos reales.** La app limita lo que cada rol ve y hace, pero la
+   seguridad definitiva debe vivir en `firestore.rules`. Pendiente: que las reglas usen el rol de la
+   persona (custom claims o consulta a `ejecutivos` por correo) y alinear los ids de documento
+   (`e1…`) con el `uid` de Auth. Ver `docs/INFORME-QA-UX.md` §Riesgos.
 2. **Config de Firebase y el Client ID de Google sin variables de entorno originalmente.** Ya se
    agregó soporte para `.env` (ver `src/config/*.js` y `.env.example`), pero los valores actuales
    del proyecto `reportes-pt-ejecutivos` siguen como *fallback* hardcodeado para no romper el

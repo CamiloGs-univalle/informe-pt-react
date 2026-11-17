@@ -1,494 +1,188 @@
 /**
- * massUpload.js
+ * utils/massUpload.js
  * ─────────────────────────────────────────────────────────────────────────
- * CARGA MASIVA: Plantillas descargables + subida CSV/Excel para Clientes y Ejecutivos
- * 
- * Uso:
- * 1. Descargar plantilla (botón en UI)
- * 2. Llenar en Excel/CSV
- * 3. Subir archivo → se valida y carga a Firestore
+ * Carga masiva desde CSV (clientes y personas) en dos pasos:
+ *   1) plan…()    → lee el archivo y dice qué se va a crear, actualizar u omitir (sin tocar nada)
+ *   2) aplicar…() → ejecuta el plan con los mismos modelos que usa el resto de la app
+ *                   (saveCli / saveEj), así no hay duplicados ni escrituras paralelas a Firestore.
+ * No se manejan contraseñas: el acceso lo da Firebase Authentication.
  */
+import { DB } from '../models/db';
+import { saveCli } from '../models/Cliente';
+import { saveEj } from '../models/Ejecutivo';
 
-import { db } from '../config/firebase';
-import { 
-  collection, doc, setDoc, writeBatch, getDocs, query, where 
-} from 'firebase/firestore';
-import { saveCli, getClis } from '../models/Cliente';
-import { saveEj, getEjs } from '../models/Ejecutivo';
-import { saveDB } from '../models/db';
+// ── CSV ──────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────
-// PLANTILLAS CSV
-// ─────────────────────────────────────────────────────────────────────────
-
-/** Plantilla CSV para Clientes */
-export const CLIENTE_TEMPLATE_CSV = `nit,nom,marca,ciu,sec,ejId,driveFolder,selId,sstId,logo
-800024095,MANITOBA S.A.S.,MANITOBA,Bogotá,,,,,
-800130144,BURICA S.A.,BURICA,Medellín,,,,,
-890311251,EJEMPLO CLIENTE S.A.S.,EJEMPLO,Cali,,,,,
-`;
-
-export const CLIENTE_TEMPLATE_HEADERS = [
-  { key: 'nit', label: 'NIT *', required: true, example: '800024095', desc: 'NIT sin puntos ni guiones' },
-  { key: 'nom', label: 'Nombre *', required: true, example: 'MANITOBA S.A.S.', desc: 'Razón social completa' },
-  { key: 'marca', label: 'Marca', required: false, example: 'MANITOBA', desc: 'Nombre comercial corto' },
-  { key: 'ciu', label: 'Ciudad', required: false, example: 'Bogotá', desc: 'Ciudad principal' },
-  { key: 'sec', label: 'Sector', required: false, example: 'Industrial', desc: 'Sector económico' },
-  { key: 'ejId', label: 'ID Atención al Cliente', required: false, example: 'e1234567890', desc: 'ID del ejecutivo que lidera (dejar vacío para asignar después)' },
-  { key: 'driveFolder', label: 'Ruta Drive', required: false, example: 'Proservis/Informes/2026/Enero', desc: 'Carpeta en Google Drive' },
-  { key: 'selId', label: 'ID Selección', required: false, example: 'e1234567891', desc: 'ID del psicólogo de Selección asignado' },
-  { key: 'sstId', label: 'ID SST', required: false, example: 'e1234567892', desc: 'ID del profesional SST asignado' },
-  { key: 'logo', label: 'Logo (base64)', required: false, example: 'data:image/png;base64,...', desc: 'Opcional: logo en base64 (máx 800KB)' }
-];
-
-/** Plantilla CSV para Ejecutivos */
-export const EJECUTIVO_TEMPLATE_CSV = `nom,email,role,password,workspaceId,areaId,activo
-Juan Pérez,juan.perez@proservis.com.co,usuario,Proservis2026,w1,a1,true
-María García,maria.garcia@proservis.com.co,admin,Proservis2026,w1,a2,true
-Carlos López,carlos.lopez@proservis.com.co,usuario,Proservis2026,w1,a1,true
-`;
-
-export const EJECUTIVO_TEMPLATE_HEADERS = [
-  { key: 'nom', label: 'Nombre *', required: true, example: 'Juan Pérez', desc: 'Nombre completo' },
-  { key: 'email', label: 'Email *', required: true, example: 'juan@proservis.com.co', desc: 'Correo corporativo (único)' },
-  { key: 'role', label: 'Rol *', required: true, example: 'usuario', desc: 'super_admin | admin | usuario' },
-  { key: 'password', label: 'Contraseña', required: false, example: 'Proservis2026', desc: 'Mín 6 chars. Default: Proservis2026' },
-  { key: 'workspaceId', label: 'Workspace ID', required: false, example: 'w1', desc: 'ID del workspace (default: w1)' },
-  { key: 'areaId', label: 'Área ID', required: false, example: 'a1', desc: 'a1=Selección, a2=SST, a3=Admin' },
-  { key: 'activo', label: 'Activo', required: false, example: 'true', desc: 'true | false' }
-];
-
-// ─────────────────────────────────────────────────────────────────────────
-// UTILIDADES CSV
-// ─────────────────────────────────────────────────────────────────────────
-
-export function parseCSV(csvText) {
-  const lines = csvText.trim().split('\n');
-  if (lines.length < 2) return [];
-  
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-  const rows = [];
-  
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    
-    // Parse CSV simple (maneja comillas)
-    const values = [];
-    let current = '';
-    let inQuotes = false;
-    
-    for (let j = 0; j < line.length; j++) {
-      const char = line[j];
-      if (char === '"' && (j === 0 || line[j-1] !== '\\')) {
-        inQuotes = !inQuotes;
-      } else if (char === ',' && !inQuotes) {
-        values.push(current.trim());
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    values.push(current.trim());
-    
-    const row = {};
-    headers.forEach((h, idx) => {
-      row[h] = values[idx]?.replace(/^"|"$/g, '') || '';
-    });
-    rows.push(row);
+/** Lee CSV con comillas, saltos de línea dentro de comillas, BOM y separador , o ; */
+export function parseCSV(texto) {
+  const t = String(texto || '').replace(/^\uFEFF/, '');
+  const primera = t.split(/\r?\n/, 1)[0] || '';
+  const sep = (primera.match(/;/g) || []).length > (primera.match(/,/g) || []).length ? ';' : ',';
+  const filas = [];
+  let fila = [], cel = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) {
+      if (ch === '"' && t[i + 1] === '"') { cel += '"'; i++; }
+      else if (ch === '"') q = false;
+      else cel += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === sep) { fila.push(cel.trim()); cel = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && t[i + 1] === '\n') i++;
+      fila.push(cel.trim()); cel = '';
+      if (fila.some(c => c !== '')) filas.push(fila);
+      fila = [];
+    } else cel += ch;
   }
-  
-  return rows;
+  fila.push(cel.trim());
+  if (fila.some(c => c !== '')) filas.push(fila);
+  if (filas.length < 2) return [];
+  const cab = filas[0].map(norm);
+  return filas.slice(1).map(f => Object.fromEntries(cab.map((h, i) => [h, f[i] ?? ''])));
 }
 
-export function generateCSV(headers, rows) {
-  const headerLine = headers.map(h => `"${h}"`).join(',');
-  const dataLines = rows.map(row => 
-    headers.map(h => `"${String(row[h] || '').replace(/"/g, '""')}"`).join(',')
-  );
-  return [headerLine, ...dataLines].join('\n');
+/** minúsculas, sin tildes ni espacios raros: "Líder Email" → "lider_email" */
+function norm(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim().replace(/[\s-]+/g, '_');
 }
+const soloDigitos = (s) => String(s || '').replace(/\D/g, '');
+const sinTildes = (s) => norm(s).replace(/_/g, ' ');
+const esSi = (v) => ['si', 'sí', 's', '1', 'true', 'activo', 'activa', 'x'].includes(sinTildes(v));
+const esNo = (v) => ['no', 'n', '0', 'false', 'inactivo', 'inactiva'].includes(sinTildes(v));
 
-export function downloadCSV(content, filename) {
-  const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' });
+function descargar(contenido, nombre) {
+  const blob = new Blob(['﻿' + contenido], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
+  const a = document.createElement('a');
+  a.href = url; a.download = nombre; a.click();
   URL.revokeObjectURL(url);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// VALIDACIÓN
-// ─────────────────────────────────────────────────────────────────────────
+// ── Definición de columnas (se muestra en pantalla y en la plantilla) ────
 
-export function validateClienteRow(row, index, existingNits, existingEmails) {
-  const errors = [];
-  const warnings = [];
-  
-  // NIT
-  if (!row.nit?.trim()) {
-    errors.push(`Fila ${index}: NIT es requerido`);
-  } else {
-    const nit = row.nit.trim().replace(/[.\-]/g, '');
-    if (!/^\d+$/.test(nit)) {
-      errors.push(`Fila ${index}: NIT debe ser solo números: "${row.nit}"`);
-    } else if (existingNits.has(nit)) {
-      errors.push(`Fila ${index}: NIT duplicado en archivo: ${nit}`);
-    } else {
-      existingNits.add(nit);
+export const COLUMNAS_CLIENTES = [
+  { key: 'nit', req: true, desc: 'NIT sin dígito de verificación; sirve para detectar si el cliente ya existe', ej: '800024095' },
+  { key: 'nombre', req: true, desc: 'Razón social', ej: 'MANITOBA S.A.S.' },
+  { key: 'marca', req: false, desc: 'Nombre comercial', ej: '' },
+  { key: 'ciudad', req: false, desc: 'Ciudad', ej: 'Cali' },
+  { key: 'sector', req: false, desc: 'Sector económico', ej: 'Industrial' },
+  { key: 'lider_email', req: false, desc: 'Correo del ejecutivo que lidera el informe de este cliente', ej: 'ejecutivo@proservis.com.co' },
+  { key: 'carpeta_drive', req: false, desc: 'Enlace a la carpeta de Drive del cliente', ej: '' },
+];
+export const COLUMNAS_PERSONAS = [
+  { key: 'nombre', req: true, desc: 'Nombre completo', ej: 'Laura Gómez' },
+  { key: 'correo', req: true, desc: 'Correo con el que entra (Google o Firebase)', ej: 'laura.gomez@proservis.com.co' },
+  { key: 'rol', req: false, desc: 'usuario, admin o super_admin (por defecto usuario)', ej: 'usuario' },
+  { key: 'area', req: false, desc: 'Nombre exacto de un área ya creada', ej: 'Atención al Cliente' },
+  { key: 'zona', req: false, desc: 'Ciudad o zona', ej: 'Cali' },
+  { key: 'activo', req: false, desc: 'si o no (por defecto si)', ej: 'si' },
+];
+
+const plantilla = (cols) => [cols.map(c => c.key).join(','), cols.map(c => `"${c.ej}"`).join(',')].join('\n');
+export const descargarPlantillaClientes = () => descargar(plantilla(COLUMNAS_CLIENTES), 'plantilla-clientes.csv');
+export const descargarPlantillaPersonas = () => descargar(plantilla(COLUMNAS_PERSONAS), 'plantilla-personas.csv');
+
+// ── Clientes ─────────────────────────────────────────────────────────────
+
+export function planClientes(texto) {
+  const filas = parseCSV(texto);
+  const porNit = new Map(DB.clis.map(c => [soloDigitos(c.nit), c]));
+  const vistos = new Set();
+  const plan = filas.map((r, i) => {
+    const n = i + 2; // línea en el archivo
+    const errores = [], avisos = [];
+    const nit = soloDigitos(r.nit);
+    const nom = (r.nombre || r.nom || '').trim();
+    if (!nit) errores.push('Falta el NIT.');
+    if (!nom) errores.push('Falta el nombre.');
+    if (nit && vistos.has(nit)) errores.push('El NIT está repetido en el archivo.');
+    if (nit) vistos.add(nit);
+    let ejId;
+    const mail = (r.lider_email || '').toLowerCase().trim();
+    if (mail) {
+      const ej = DB.ejs.find(e => (e.email || '').toLowerCase() === mail);
+      if (ej) ejId = ej.id; else avisos.push(`No existe una persona con el correo ${mail}; el cliente queda sin líder.`);
     }
-    row.nit = nit;
-  }
-  
-  // Nombre
-  if (!row.nom?.trim()) {
-    errors.push(`Fila ${index}: Nombre es requerido`);
-  } else {
-    row.nom = row.nom.trim();
-  }
-  
-  // Marca
-  row.marca = row.marca?.trim() || '';
-  
-  // Ciudad
-  row.ciu = row.ciu?.trim() || '';
-  
-  // Sector
-  row.sec = row.sec?.trim() || '';
-  
-  // ejId
-  row.ejId = row.ejId?.trim() || '';
-  
-  // driveFolder
-  row.driveFolder = row.driveFolder?.trim() || '';
-  
-  // selId
-  row.selId = row.selId?.trim() || '';
-  
-  // sstId
-  row.sstId = row.sstId?.trim() || '';
-  
-  // logo
-  row.logo = row.logo?.trim() || null;
-  
-  return { errors, warnings, row };
-}
-
-export function validateEjecutivoRow(row, index, existingEmails) {
-  const errors = [];
-  const warnings = [];
-  
-  // Nombre
-  if (!row.nom?.trim()) {
-    errors.push(`Fila ${index}: Nombre es requerido`);
-  } else {
-    row.nom = row.nom.trim();
-  }
-  
-  // Email
-  if (!row.email?.trim()) {
-    errors.push(`Fila ${index}: Email es requerido`);
-  } else {
-    const email = row.email.trim().toLowerCase();
-    if (!email.includes('@')) {
-      errors.push(`Fila ${index}: Email inválido: "${row.email}"`);
-    } else if (existingEmails.has(email)) {
-      errors.push(`Fila ${index}: Email duplicado en archivo: ${email}`);
-    } else {
-      existingEmails.add(email);
-    }
-    row.email = email;
-  }
-  
-  // Role
-  const validRoles = ['super_admin', 'admin', 'usuario'];
-  row.role = row.role?.trim().toLowerCase() || 'usuario';
-  if (!validRoles.includes(row.role)) {
-    errors.push(`Fila ${index}: Rol inválido "${row.role}". Use: ${validRoles.join(', ')}`);
-  }
-  
-  // Password
-  row.password = row.password?.trim() || 'Proservis2026';
-  if (row.password.length < 6) {
-    warnings.push(`Fila ${index}: Contraseña muy corta (mín 6), se usará default`);
-    row.password = 'Proservis2026';
-  }
-  
-  // Workspace
-  row.workspaceId = row.workspaceId?.trim() || 'w1';
-  
-  // Area
-  row.areaId = row.areaId?.trim() || 'a1';
-  
-  // Activo
-  row.activo = row.activo?.trim().toLowerCase() !== 'false';
-  
-  return { errors, warnings, row };
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// CARGA MASIVA A FIRESTORE
-// ─────────────────────────────────────────────────────────────────────────
-
-export async function uploadClientesCSV(csvText, onProgress) {
-  const rows = parseCSV(csvText);
-  console.log(`📥 Procesando ${rows.length} clientes...`);
-  
-  const existingNits = new Set();
-  const existingEmails = new Set();
-  const validRows = [];
-  const allErrors = [];
-  const allWarnings = [];
-  
-  // Validar
-  for (let i = 0; i < rows.length; i++) {
-    const { errors, warnings, row } = validateClienteRow(rows[i], i + 2, existingNits, existingEmails);
-    allErrors.push(...errors);
-    allWarnings.push(...warnings);
-    if (errors.length === 0) validRows.push(row);
-  }
-  
-  if (allErrors.length > 0) {
-    return { 
-      success: false, 
-      errors: allErrors, 
-      warnings: allWarnings,
-      processed: 0,
-      total: rows.length
-    };
-  }
-  
-  // Verificar NITs existentes en Firestore
-  console.log('🔍 Verificando NITs existentes en Firestore...');
-  const existingInDb = new Set();
-  const clisSnap = await getDocs(collection(db, 'clientes'));
-  clisSnap.docs.forEach(d => {
-    const nit = d.data().nit?.replace(/[.\-]/g, '');
-    if (nit) existingInDb.add(nit);
+    const existente = nit ? porNit.get(nit) : null;
+    const datos = { nit, nom, marca: r.marca || '', ciu: r.ciudad || '', sec: r.sector || '', driveFolder: r.carpeta_drive || '' };
+    if (ejId) datos.ejId = ejId;
+    return { n, nombre: nom || '(sin nombre)', accion: errores.length ? 'error' : existente ? 'actualizar' : 'crear', existenteId: existente?.id, datos, errores, avisos };
   });
-  
-  // Filtrar los que ya existen
-  const toCreate = [];
-  const toUpdate = [];
-  
-  for (const row of validRows) {
-    if (existingInDb.has(row.nit)) {
-      toUpdate.push(row);
-    } else {
-      toCreate.push(row);
-    }
-  }
-  
-  console.log(`   📝 ${toCreate.length} nuevos, 🔄 ${toUpdate.length} actualizaciones`);
-  
-  // Subir en batches
-  let created = 0;
-  let updated = 0;
-  
-  // Crear nuevos
-  for (let i = 0; i < toCreate.length; i++) {
-    const row = toCreate[i];
-    try {
-      await saveCli({
-        nit: row.nit,
-        nom: row.nom,
-        marca: row.marca || null,
-        ciu: row.ciu || null,
-        sec: row.sec || null,
-        ejId: row.ejId || null,
-        driveFolder: row.driveFolder || '',
-        logo: row.logo,
-        asignaciones: {
-          ...(row.selId ? { a1: row.selId } : {}),
-          ...(row.sstId ? { a2: row.sstId } : {})
-        }
-      });
-      created++;
-      if (onProgress) onProgress({ created, updated, total: validRows.length, current: row.nom });
-    } catch (e) {
-      console.error(`Error creando ${row.nit}:`, e);
-      allErrors.push(`Error creando ${row.nit}: ${e.message}`);
-    }
-  }
-  
-  // Actualizar existentes (buscar por NIT)
-  for (let i = 0; i < toUpdate.length; i++) {
-    const row = toUpdate[i];
-    try {
-      // Buscar cliente por NIT
-      const q = query(collection(db, 'clientes'), where('nit', '==', row.nit));
-      const snap = await getDocs(q);
-      
-      if (!snap.empty) {
-        const cliDoc = snap.docs[0];
-        await setDoc(doc(db, 'clientes', cliDoc.id), {
-          nom: row.nom,
-          marca: row.marca || null,
-          ciu: row.ciu || null,
-          sec: row.sec || null,
-          ejId: row.ejId || null,
-          driveFolder: row.driveFolder || '',
-          logo: row.logo,
-          asignaciones: {
-            ...(row.selId ? { a1: row.selId } : {}),
-            ...(row.sstId ? { a2: row.sstId } : {})
-          },
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-        updated++;
-      }
-      if (onProgress) onProgress({ created, updated, total: validRows.length, current: row.nom });
-    } catch (e) {
-      console.error(`Error actualizando ${row.nit}:`, e);
-      allErrors.push(`Error actualizando ${row.nit}: ${e.message}`);
-    }
-  }
-  
-  await saveDB();
-  
-  return { 
-    success: allErrors.length === 0, 
-    errors: allErrors, 
-    warnings: allWarnings,
-    created,
-    updated,
-    processed: created + updated,
-    total: rows.length
-  };
+  return resumir(plan);
 }
 
-export async function uploadEjecutivosCSV(csvText, onProgress) {
-  const rows = parseCSV(csvText);
-  console.log(`📥 Procesando ${rows.length} ejecutivos...`);
-  
-  const existingEmails = new Set();
-  const validRows = [];
-  const allErrors = [];
-  const allWarnings = [];
-  
-  // Validar
-  for (let i = 0; i < rows.length; i++) {
-    const { errors, warnings, row } = validateEjecutivoRow(rows[i], i + 2, existingEmails);
-    allErrors.push(...errors);
-    allWarnings.push(...warnings);
-    if (errors.length === 0) validRows.push(row);
-  }
-  
-  if (allErrors.length > 0) {
-    return { 
-      success: false, 
-      errors: allErrors, 
-      warnings: allWarnings,
-      processed: 0,
-      total: rows.length
-    };
-  }
-  
-  // Verificar emails existentes en Firestore
-  console.log('🔍 Verificando emails existentes en Firestore...');
-  const existingInDb = new Set();
-  const ejsSnap = await getDocs(collection(db, 'ejecutivos'));
-  ejsSnap.docs.forEach(d => {
-    const email = d.data().email?.toLowerCase();
-    if (email) existingInDb.add(email);
+export function aplicarClientes(plan) {
+  const wsDef = DB.workspaces[0]?.id || '';
+  let creados = 0, actualizados = 0;
+  plan.filas.forEach(f => {
+    if (f.accion === 'error') return;
+    if (f.accion === 'actualizar') {
+      // Solo se pisan los campos que el archivo trae con valor
+      const cambios = Object.fromEntries(Object.entries(f.datos).filter(([, v]) => v !== ''));
+      saveCli({ ...cambios, id: f.existenteId }); actualizados++;
+    } else {
+      saveCli({ ...f.datos, ejId: f.datos.ejId || '', workspaceId: wsDef }); creados++;
+    }
   });
-  
-  // Filtrar
-  const toCreate = [];
-  const toUpdate = [];
-  
-  for (const row of validRows) {
-    if (existingInDb.has(row.email)) {
-      toUpdate.push(row);
-    } else {
-      toCreate.push(row);
+  return { creados, actualizados, omitidos: plan.filas.length - creados - actualizados };
+}
+
+// ── Personas ─────────────────────────────────────────────────────────────
+
+const ROLES_OK = { usuario: 'usuario', admin: 'admin', administrador: 'admin', super_admin: 'super_admin', superadmin: 'super_admin', 'super admin': 'super_admin' };
+
+export function planPersonas(texto, actor) {
+  const filas = parseCSV(texto);
+  const porMail = new Map(DB.ejs.map(e => [(e.email || '').toLowerCase(), e]));
+  const vistos = new Set();
+  const plan = filas.map((r, i) => {
+    const n = i + 2;
+    const errores = [], avisos = [];
+    const nom = (r.nombre || r.nom || '').trim();
+    const email = (r.correo || r.email || '').toLowerCase().trim();
+    if (!nom) errores.push('Falta el nombre.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errores.push('El correo no es válido.');
+    if (email && vistos.has(email)) errores.push('El correo está repetido en el archivo.');
+    if (email) vistos.add(email);
+    const rolTxt = sinTildes(r.rol || '') || 'usuario';
+    const role = ROLES_OK[rolTxt.replace(/ /g, '_')] || ROLES_OK[rolTxt];
+    if (!role) errores.push(`Rol desconocido «${r.rol}». Usa usuario, admin o super_admin.`);
+    if (role === 'super_admin' && actor?.role !== 'super_admin') errores.push('Solo un super admin puede crear super admins.');
+    let areaId = '', workspaceId = '';
+    if (r.area) {
+      const a = DB.areas.find(x => sinTildes(x.nombre) === sinTildes(r.area));
+      if (a) { areaId = a.id; workspaceId = a.workspaceId; } else avisos.push(`No existe el área «${r.area}»; la persona queda sin área.`);
     }
-  }
-  
-  console.log(`   📝 ${toCreate.length} nuevos, 🔄 ${toUpdate.length} actualizaciones`);
-  
-  let created = 0;
-  let updated = 0;
-  
-  // Crear nuevos
-  for (let i = 0; i < toCreate.length; i++) {
-    const row = toCreate[i];
+    let activo;
+    if (esSi(r.activo)) activo = true; else if (esNo(r.activo)) activo = false;
+    const existente = email ? porMail.get(email) : null;
+    const datos = { nom, email, role: role || 'usuario', zona: r.zona || '' };
+    if (areaId) { datos.areaId = areaId; datos.workspaceId = workspaceId; }
+    if (activo !== undefined) datos.activo = activo;
+    return { n, nombre: nom || '(sin nombre)', accion: errores.length ? 'error' : existente ? 'actualizar' : 'crear', existenteId: existente?.id, datos, errores, avisos };
+  });
+  return resumir(plan);
+}
+
+export function aplicarPersonas(plan, actor) {
+  let creados = 0, actualizados = 0;
+  const fallos = [];
+  plan.filas.forEach(f => {
+    if (f.accion === 'error') return;
     try {
-      await saveEj({
-        nom: row.nom,
-        email: row.email,
-        role: row.role,
-        password: row.password,
-        workspaceId: row.workspaceId,
-        areaId: row.areaId,
-        activo: row.activo
-      });
-      created++;
-      if (onProgress) onProgress({ created, updated, total: validRows.length, current: row.nom });
-    } catch (e) {
-      console.error(`Error creando ${row.email}:`, e);
-      allErrors.push(`Error creando ${row.email}: ${e.message}`);
-    }
-  }
-  
-  // Actualizar existentes
-  for (let i = 0; i < toUpdate.length; i++) {
-    const row = toUpdate[i];
-    try {
-      const q = query(collection(db, 'ejecutivos'), where('email', '==', row.email));
-      const snap = await getDocs(q);
-      
-      if (!snap.empty) {
-        const ejDoc = snap.docs[0];
-        await setDoc(doc(db, 'ejecutivos', ejDoc.id), {
-          nom: row.nom,
-          role: row.role,
-          password: row.password,
-          workspaceId: row.workspaceId,
-          areaId: row.areaId,
-          activo: row.activo,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-        updated++;
+      if (f.accion === 'actualizar') {
+        const cambios = Object.fromEntries(Object.entries(f.datos).filter(([, v]) => v !== ''));
+        saveEj({ ...cambios, id: f.existenteId }, actor); actualizados++;
+      } else {
+        saveEj({ areaId: '', workspaceId: DB.workspaces[0]?.id || '', activo: true, ...f.datos }, actor); creados++;
       }
-      if (onProgress) onProgress({ created, updated, total: validRows.length, current: row.nom });
-    } catch (e) {
-      console.error(`Error actualizando ${row.email}:`, e);
-      allErrors.push(`Error actualizando ${row.email}: ${e.message}`);
-    }
-  }
-  
-  await saveDB();
-  
-  return { 
-    success: allErrors.length === 0, 
-    errors: allErrors, 
-    warnings: allWarnings,
-    created,
-    updated,
-    processed: created + updated,
-    total: rows.length
-  };
+    } catch (e) { fallos.push(`Línea ${f.n}: ${e.message}`); }
+  });
+  return { creados, actualizados, omitidos: plan.filas.length - creados - actualizados - fallos.length, fallos };
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// EXPORTAR PLANTILLAS
-// ─────────────────────────────────────────────────────────────────────────
-
-export function downloadClienteTemplate() {
-  downloadCSV(CLIENTE_TEMPLATE_CSV, 'plantilla_clientes.csv');
-}
-
-export function downloadEjecutivoTemplate() {
-  downloadCSV(EJECUTIVO_TEMPLATE_CSV, 'plantilla_ejecutivos.csv');
-}
-
-export function getClienteTemplateInfo() {
-  return { headers: CLIENTE_TEMPLATE_HEADERS, csv: CLIENTE_TEMPLATE_CSV };
-}
-
-export function getEjecutivoTemplateInfo() {
-  return { headers: EJECUTIVO_TEMPLATE_HEADERS, csv: EJECUTIVO_TEMPLATE_CSV };
+function resumir(filas) {
+  const cuenta = (a) => filas.filter(f => f.accion === a).length;
+  return { filas, crear: cuenta('crear'), actualizar: cuenta('actualizar'), errores: cuenta('error'), total: filas.length };
 }

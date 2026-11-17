@@ -24,28 +24,28 @@ export default function StepRevisarDatos({ dataReport, headcount, seleccion, rot
         <div className="ct">📋 Datos extraídos</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>👥 Headcount</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>👥 Headcount</div>
             <div style={{ fontSize: 12, color: 'var(--tx)' }}>
               Inicio: {headcount.inicio} | Ingresos: {headcount.ingresos} | Retiros: {headcount.retiros}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--vd)', fontWeight: 700 }}>
+            <div style={{ fontSize: 12, color: 'var(--vd)', fontWeight: 700 }}>
               Cierre: {headcount.inicio + headcount.ingresos - headcount.retiros}
             </div>
           </div>
           <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>🎯 Selección</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>🎯 Selección</div>
             <div style={{ fontSize: 12, color: 'var(--tx)' }}>{seleccion.length} RQ(s) encontrado(s)</div>
           </div>
           <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>↻ Rotación</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>↻ Rotación</div>
             <div style={{ fontSize: 12, color: 'var(--tx)' }}>{rotacion.length} motivo(s) encontrado(s)</div>
           </div>
           <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>🛡️ SST</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>🛡️ SST</div>
             <div style={{ fontSize: 12, color: 'var(--tx)' }}>{sst.casos?.length || 0} caso(s)</div>
           </div>
           <div style={{ background: 'var(--vc)', padding: 12, borderRadius: 8 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>💰 Nómina</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--vd)', marginBottom: 4 }}>💰 Nómina</div>
             <div style={{ fontSize: 12, color: 'var(--tx)' }}>Liquidados: {nomina.liquidados || 0}</div>
           </div>
         </div>

@@ -1,161 +1,286 @@
 /**
- * views/pages/ConfigModulos.jsx
+ * views/pages/ConfigModulos.jsx  (menú: "Mis módulos")
  * ─────────────────────────────────────────────────────────────────────────
- * Lets a Usuario choose which report modules are active by default, and
- * optionally override that per cliente.
+ * El único lugar donde se decide qué módulos van en el informe de cada cliente.
+ *
+ *  - Ejecutivo líder: elige qué secciones lleva el informe final de cada uno de
+ *    sus clientes.
+ *  - Persona de un área (Selección, SST…): elige, cliente por cliente, qué
+ *    módulos de su área reporta.
+ *  - Admin / super admin: pueden configurar a cualquier persona de su alcance.
+ *
+ * Vista "Global" = todos mis clientes a la vez (una casilla cambia el módulo en
+ * todos; queda a medias si no va igual en todos). Vista de un cliente = solo ese.
+ * La tabla "Cliente por cliente" permite dejar excepciones sin cambiar de
+ * pantalla. Todo se guarda al instante y lo usan el formulario del aporte, el
+ * tablero, los pendientes y el informe (ver models/ModuloConfig.js).
  */
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { DB } from '../../models/db';
 import { MODULOS } from '../../models/constants';
-import { getModuloConfig, saveModuloConfig, getModuloConfigForClient, saveModuloConfigForClient } from '../../models/ModuloConfig';
-import { getClisForEj, getClis } from '../../models/Cliente';
-import { getEjs } from '../../models/Ejecutivo';
-import { useToast } from '../common/useToast';
+import { cfgCompleta, setModulosEnClientes } from '../../models/ModuloConfig';
+import { areasDeAporte, clientesQueLidera, equipoIds, esLider } from '../../models/Alcance';
+import { getEj } from '../../models/Ejecutivo';
+import { fmtNum, plural } from '../../utils/format';
+import { useToast, useConfirm } from '../common/useToast';
+import PageHeader from '../common/PageHeader';
+import EmptyState from '../common/EmptyState';
+
+/** Punto final que no duplica el de "S.A.". */
+const fin = (t) => (String(t).endsWith('.') ? '' : '.');
+const ON = (objetivoId, cliId, modId) => cfgCompleta(objetivoId, cliId)[modId] !== false;
+
+/** Casilla que puede quedar "a medias" (indeterminate). */
+function Casilla({ estado, onChange, label, ...rest }) {
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = estado === 'mixto'; }, [estado]);
+  return <input ref={ref} type="checkbox" checked={estado === 'todos'} onChange={onChange} aria-label={label} {...rest} />;
+}
+
+/** Arma los grupos de módulos que la persona puede decidir, con los clientes de cada uno. */
+function gruposDe(objetivo) {
+  const grupos = [];
+  if (!objetivo) return grupos;
+  if (objetivo.role === 'super_admin' || esLider(objetivo)) {
+    grupos.push({
+      key: 'lider', titulo: 'Informe final', ayuda: 'Qué secciones lleva el informe de cada cliente que lideras.',
+      mods: MODULOS, clientes: clientesQueLidera(objetivo),
+    });
+  }
+  if (objetivo.role !== 'super_admin') {
+    const vistas = new Set();
+    areasDeAporte(objetivo).forEach(a => {
+      if (vistas.has(a.id)) return;
+      vistas.add(a.id);
+      grupos.push({
+        key: a.id, titulo: a.nombre, ayuda: `Qué módulos de ${a.nombre} reportas en cada cliente.`,
+        mods: MODULOS.filter(m => (a.modulos || []).includes(m.id)),
+        clientes: DB.clis.filter(c => c.asignaciones?.[a.id] === objetivo.id),
+        area: a,
+      });
+    });
+  }
+  return grupos.filter(g => g.mods.length);
+}
 
 export default function ConfigModulos({ user }) {
   const toast = useToast();
-  const isSuper = user?.role === 'super_admin';
-  const [targetUserId, setTargetUserId] = useState(user?.id);
-  const [cfg, setCfg] = useState(() => getModuloConfig(targetUserId));
-  const [targetUser, setTargetUser] = useState(null);
-  const [allUsers, setAllUsers] = useState([]);
-  const [clientes, setClientes] = useState([]);
-  const [selCli, setSelCli] = useState('');
-  const [cliCfg, setCliCfg] = useState(null);
+  const confirmar = useConfirm();
+  const puedeElegir = user.role !== 'usuario';
+  const [objetivoId, setObjetivoId] = useState(user.id);
+  const [selCli, setSelCli] = useState(''); // '' = Global
+  const [ultimo, setUltimo] = useState('');
+  const [version, setVersion] = useState(0);
+  const refrescar = (msg) => { setVersion(v => v + 1); if (msg) setUltimo(msg); };
 
-  useEffect(() => {
-    const allEjs = getEjs();
-    if (isSuper) {
-      setAllUsers(allEjs.filter(u => u.role !== 'super_admin'));
+  const personas = useMemo(() => {
+    if (!puedeElegir) return [user];
+    const ids = equipoIds(user);
+    return DB.ejs.filter(e => ids.has(e.id) && e.activo !== false && (e.role === 'super_admin' || esLider(e) || areasDeAporte(e).length));
+  }, [user, puedeElegir]);
+
+  const objetivo = getEj(objetivoId) || user;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const grupos = useMemo(() => gruposDe(objetivo), [objetivo, version]);
+  const clientesTodos = useMemo(() => {
+    const m = new Map();
+    grupos.forEach(g => g.clientes.forEach(c => m.set(c.id, c)));
+    return [...m.values()].sort((a, b) => a.nom.localeCompare(b.nom));
+  }, [grupos]);
+  const cliSel = clientesTodos.find(c => c.id === selCli) || null;
+  const global = !cliSel;
+
+  const cambiarObjetivo = (id) => { setObjetivoId(id); setSelCli(''); setUltimo(''); };
+
+  /** Clientes sobre los que actúa la vista actual, dentro de un grupo. */
+  const alcanceDe = (g) => (global ? g.clientes : g.clientes.filter(c => c.id === cliSel.id));
+
+  const estadoDe = (g, modId) => {
+    const cs = alcanceDe(g);
+    if (!cs.length) return { estado: 'ninguno', n: 0, total: 0, faltan: [] };
+    const faltan = cs.filter(c => !ON(objetivoId, c.id, modId));
+    const n = cs.length - faltan.length;
+    return { estado: n === cs.length ? 'todos' : n === 0 ? 'ninguno' : 'mixto', n, total: cs.length, faltan };
+  };
+
+  const cambiar = (g, modId, valor) => {
+    const cs = alcanceDe(g);
+    if (!cs.length) return;
+    setModulosEnClientes(objetivoId, cs.map(c => c.id), [modId], valor, { tambienGlobal: global && g.key === 'lider' });
+    const nom = MODULOS.find(m => m.id === modId)?.label || modId;
+    const destino = global ? (cs.length === 1 ? cs[0].nom : `tus ${cs.length} clientes`) : cliSel.nom;
+    refrescar(`Guardado: ${nom} ${valor ? 'ahora va' : 'ya no va'} en ${destino}${fin(destino)}`);
+  };
+
+  const cambiarFila = (g, cli, valor) => {
+    setModulosEnClientes(objetivoId, [cli.id], g.mods.map(m => m.id), valor, {});
+    refrescar(`Guardado: ${valor ? 'activaste' : 'desactivaste'} todos los módulos de ${g.titulo} en ${cli.nom}${cli.nom.endsWith('.') ? '' : '.'}`);
+  };
+
+  const cambiarTodo = async (valor) => {
+    const trabajo = grupos.map(g => ({ g, cs: alcanceDe(g) })).filter(x => x.cs.length);
+    if (!trabajo.length) return;
+    const nMods = trabajo.reduce((s, x) => s + x.g.mods.length, 0);
+    const alcance = global ? 'todos tus clientes' : cliSel.nom;
+    if (!valor) {
+      const ok = await confirmar({
+        title: 'Desactivar todos los módulos',
+        message: `Vas a quitar ${plural(nMods, 'módulo')} de ${alcance}. No se pedirán en los aportes ni saldrán en el informe. Puedes volver a activarlos cuando quieras.`,
+        confirmLabel: 'Desactivar todo', danger: true,
+      });
+      if (!ok) return;
     }
-    const clis = targetUserId ? (getClisForEj(targetUserId).length ? getClisForEj(targetUserId) : getClis().slice(0, 5)) : [];
-    setClientes(clis);
-    setTargetUser(allEjs.find(u => u.id === targetUserId) || user);
-    setCfg(getModuloConfig(targetUserId));
-  }, [targetUserId, isSuper, user]);
+    trabajo.forEach(({ g, cs }) => setModulosEnClientes(objetivoId, cs.map(c => c.id), g.mods.map(m => m.id), valor, { tambienGlobal: global && g.key === 'lider' }));
+    refrescar();
+    toast(`${valor ? 'Activaste' : 'Desactivaste'} todos los módulos de ${alcance}${alcance.endsWith('.') ? '' : '.'}`, 'ok');
+  };
 
-  useEffect(() => {
-    if (selCli) setCliCfg(getModuloConfigForClient(targetUserId, selCli));
-    else setCliCfg(null);
-  }, [selCli, targetUserId]);
+  // ── Tarjetas de arriba ────────────────────────────────────────────────
+  let activos = 0; let total = 0; let distintos = 0;
+  grupos.forEach(g => g.mods.forEach(m => {
+    if (!alcanceDe(g).length) return;
+    total++;
+    const st = estadoDe(g, m.id).estado;
+    if (st === 'todos') activos++;
+    if (st === 'mixto') distintos++;
+  }));
+  const rolesTxt = [
+    ...(grupos.some(g => g.key === 'lider') ? ['Ejecutivo líder'] : []),
+    ...grupos.filter(g => g.area).map(g => g.titulo),
+  ].join(' · ') || 'Sin área';
 
-  const toggle = (id) => {
-    const next = { ...cfg, [id]: !cfg[id] };
-    setCfg(next);
-  };
-  const save = () => {
-    saveModuloConfig(targetUserId, cfg);
-    toast(`Configuración guardada para ${targetUser?.nom || 'usuario'} Señor`);
-  };
-  const toggleCli = (id) => {
-    const next = { ...cliCfg, [id]: !cliCfg[id] };
-    setCliCfg(next);
-  };
-  const saveCli = () => {
-    if (!selCli) return;
-    saveModuloConfigForClient(targetUserId, selCli, cliCfg);
-    toast('Configuración por cliente guardada');
-  };
-  const allOn = () => setCfg(Object.fromEntries(MODULOS.map(m => [m.id, true])));
-  const allOff = () => setCfg(Object.fromEntries(MODULOS.map(m => [m.id, false])));
-
-  const activeCount = Object.values(cfg).filter(Boolean).length;
+  if (!grupos.length) {
+    return (
+      <div>
+        <PageHeader title="Mis módulos" subtitle="Decide qué módulos van en el informe de cada cliente." />
+        {puedeElegir && personas.length > 1 && (
+          <div className="toolbar">
+            <label className="flabel" htmlFor="cfg-persona" style={{ margin: 0 }}>Configurando a</label>
+            <select id="cfg-persona" className="finput" style={{ maxWidth: 360 }} value={objetivoId} onChange={e => cambiarObjetivo(e.target.value)}>
+              {personas.map(p => <option key={p.id} value={p.id}>{p.nom}{p.id === user.id ? ' (yo)' : ''}</option>)}
+            </select>
+          </div>
+        )}
+        <EmptyState icon="🧭" title="Todavía no tienes módulos que decidir">
+          Aparecerán aquí cuando lideres el informe de un cliente o te asignen a un cliente en un área con módulos. Eso lo hace tu administrador en Clientes y asignaciones.
+        </EmptyState>
+      </div>
+    );
+  }
 
   return (
     <div>
-      <div className="ph">Configurar Módulos 
-        {isSuper ? (
-          <span style={{ fontSize: 11, color: 'var(--grt)', fontWeight: 600, marginLeft: 8 }}>
-            Super Admin · Configura para cualquier usuario
-          </span>
-        ) : (
-          <span style={{ fontSize: 11, color: 'var(--grt)', fontWeight: 600 }}>Usuario · Se guarda para la próxima</span>
-        )}
-      </div>
-      <div className="ps">{isSuper 
-        ? 'Como Super Admin, puedes configurar los módulos de cualquier usuario del sistema. Selecciona un usuario abajo.'
-        : 'El usuario elige qué módulos aparecen en su informe. La configuración queda guardada y la próxima vez ya está lista. Puede tener una config global y una por cliente.'}
-      </div>
+      <PageHeader title="Mis módulos"
+        subtitle="Elige qué módulos van en cada cliente. Lo que apagues no se pide en los aportes ni aparece en el PDF, HTML o PowerPoint. Los cambios se guardan al instante." />
 
-      {isSuper && (
-        <div className="card" style={{ borderTop: '3px solid #12212D', background: '#FAFAFA', marginBottom: 14 }}>
-          <div className="ct">👤 Seleccionar usuario a configurar</div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select className="finput" value={targetUserId} onChange={e => setTargetUserId(e.target.value)} style={{ minWidth: 300, maxWidth: 400 }}>
-              {allUsers.map(u => (
-                <option key={u.id} value={u.id}>
-                  {u.nom} {u.role === 'admin' ? '◆ Admin' : ''} — {u.email} {u.activo === false && '(inactivo)'}
-                </option>
-              ))}
-            </select>
-            <span style={{ fontSize: 12, color: '#12212D', fontWeight: 700 }}>
-              Usuario actual: <strong>{targetUser?.nom}</strong> ({targetUser?.role})
-            </span>
-          </div>
+      {puedeElegir && personas.length > 1 && (
+        <div className="toolbar">
+          <label className="flabel" htmlFor="cfg-persona" style={{ margin: 0 }}>Configurando a</label>
+          <select id="cfg-persona" className="finput" style={{ maxWidth: 360 }} value={objetivoId} onChange={e => cambiarObjetivo(e.target.value)}>
+            {personas.map(p => <option key={p.id} value={p.id}>{p.nom}{p.id === user.id ? ' (yo)' : ''}</option>)}
+          </select>
         </div>
       )}
 
       <div className="kgrid">
-        <div className="kpi" style={{ borderLeftColor: '#168A43' }}><div className="kl">Módulos activos</div><div className="kv">{activeCount}/{MODULOS.length}</div><div className="ks">Config global</div></div>
-        <div className="kpi am"><div className="kl">Cliente seleccionado</div><div className="kv" style={{ fontSize: 14 }}>{selCli ? (clientes.find(c => c.id === selCli)?.nom || selCli) : 'Global'}</div><div className="ks">{selCli ? 'Config específica' : 'Aplica a todos'}</div></div>
-        <div className="kpi"><div className="kl">Usuario</div><div className="kv" style={{ fontSize: 14 }}>{targetUser?.nom}</div><div className="ks">{targetUser?.email} {targetUser?.role === 'admin' && '◆ Admin'}</div></div>
+        <div className={'kpi' + (distintos ? ' am' : '')}>
+          <div className="kl">Módulos activos</div>
+          <div className="kv">{fmtNum(activos)}/{fmtNum(total)}</div>
+          <div className="ks">{distintos ? `${plural(distintos, 'módulo')} ${distintos === 1 ? 'va distinto' : 'van distintos'} según el cliente` : 'Igual en todos los clientes de esta vista'}</div>
+        </div>
+        <div className="kpi"><div className="kl">Cliente seleccionado</div><div className="kv text-wrap-kv">{global ? 'Global' : cliSel.nom}</div><div className="ks">{global ? plural(clientesTodos.length, 'cliente') + ' a la vez' : 'Solo este cliente'}</div></div>
+        <div className="kpi"><div className="kl">Usuario</div><div className="kv text-wrap-kv">{objetivo.nom}</div><div className="ks">{rolesTxt}</div></div>
       </div>
 
-      <div className="card" style={{ borderTop: '3px solid #168A43' }}>
-        <div className="ct">⚙️ Configuración global — mis módulos</div>
-        <div style={{ fontSize: 11, color: 'var(--grt)', marginBottom: 12 }}>Activa/desactiva los módulos que quieres incluir por defecto en todos tus informes. Esto se guarda automáticamente y no tienes que volver a configurarlo.</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <button className="btn bgh bsm" onClick={allOn}>Activar todo</button>
-          <button className="btn bgh bsm" onClick={allOff}>Desactivar todo</button>
-          <button className="btn bvd bsm" onClick={save} style={{ marginLeft: 'auto' }}>💾 Guardar configuración global</button>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 10 }}>
-          {MODULOS.map(m => (
-            <label key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', background: cfg[m.id] ? 'var(--vc)' : 'var(--gr)', border: cfg[m.id] ? '1.5px solid #C8E6D4' : '1.5px solid var(--grb)', borderRadius: 10, padding: '12px 14px', cursor: 'pointer', transition: 'all .15s' }}>
-              <input type="checkbox" checked={!!cfg[m.id]} onChange={() => toggle(m.id)} style={{ width: 18, height: 18, accentColor: '#168A43' }} />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, display: 'flex', gap: 6, alignItems: 'center' }}><span>{m.icon}</span>{m.label} {cfg[m.id] && <span className="b bok" style={{ fontSize: 9, marginLeft: 6 }}>Activo</span>}</div>
-                <div style={{ fontSize: 11, color: 'var(--grt)' }}>{m.desc}</div>
-              </div>
-            </label>
-          ))}
-        </div>
-        <div className="alrt avd" style={{ marginTop: 12, fontSize: 11 }}>Esta configuración se usa en <strong>Nuevo informe</strong> para decidir qué secciones mostrar para <strong>{targetUser?.nom}</strong>. Si desactivas un módulo, no se pedirá ni se exportará.</div>
-      </div>
-
-      <div className="card" style={{ borderTop: '3px solid #E8BB26' }}>
-        <div className="ct">🎯 Configuración por cliente (opcional)</div>
-        <div style={{ fontSize: 11, color: 'var(--grt)', marginBottom: 10 }}>Si un cliente necesita módulos distintos, selecciónalo y personaliza. Si no eliges nada, se usa la global.</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <select className="finput" value={selCli} onChange={e => setSelCli(e.target.value)} style={{ maxWidth: 280 }}>
-            <option value="">— Seleccionar cliente —</option>
-            {clientes.map(c => <option key={c.id} value={c.id}>{c.nom}{c.marca ? ' · ' + c.marca : ''}</option>)}
+      <div className="card">
+        <div className="toolbar" style={{ boxShadow: 'none', padding: 0, border: 'none', background: 'transparent', marginBottom: 12 }}>
+          <label className="flabel" htmlFor="cfg-cliente" style={{ margin: 0 }}>Ver</label>
+          <select id="cfg-cliente" className="finput grow" value={selCli} onChange={e => setSelCli(e.target.value)}>
+            <option value="">Global — todos mis clientes ({clientesTodos.length})</option>
+            {clientesTodos.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}
           </select>
-          {selCli && <button className="btn bvd bsm" onClick={saveCli}>💾 Guardar por cliente</button>}
-          {selCli && <button className="btn bgh bsm" onClick={() => { setSelCli(''); }}>Limpiar</button>}
+          <button type="button" className="btn bgh bsm" onClick={() => cambiarTodo(true)}>Activar todo</button>
+          <button type="button" className="btn bgh bsm" onClick={() => cambiarTodo(false)}>Desactivar todo</button>
         </div>
-        {selCli && cliCfg && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 8 }}>
-            {MODULOS.map(m => (
-              <label key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', background: cliCfg[m.id] ? '#FDF6D8' : 'var(--gr)', border: '1px solid var(--grb)', borderRadius: 8, padding: '10px 12px', cursor: 'pointer' }}>
-                <input type="checkbox" checked={!!cliCfg[m.id]} onChange={() => toggleCli(m.id)} style={{ accentColor: '#E8BB26' }} />
-                <span style={{ fontSize: 12, fontWeight: 600 }}>{m.icon} {m.label}</span>
-              </label>
-            ))}
-          </div>
-        )}
-        {!selCli && <div style={{ background: 'var(--gr)', border: '1px dashed var(--grb)', borderRadius: 8, padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--grt)' }}>Selecciona un cliente arriba para personalizar sus módulos.</div>}
+        <p className="text-muted" style={{ margin: 0 }} role="status" aria-live="polite">
+          {ultimo || (global ? 'En Global, una casilla cambia el módulo en todos tus clientes a la vez. Si queda a medias, no va igual en todos.' : `Los cambios aplican solo a ${cliSel.nom}${fin(cliSel.nom)}`)}
+        </p>
       </div>
 
-      <div className="card" style={{ background: 'var(--vc)', border: '1px solid #C8E6D4' }}>
-        <div className="ct">👁 Vista previa — cómo quedará tu informe</div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {MODULOS.filter(m => cfg[m.id]).map(m => (
-            <span key={m.id} className="b bok" style={{ padding: '6px 10px', fontSize: 11 }}>{m.icon} {m.label}</span>
-          ))}
-          {activeCount === 0 && <span className="b bbd">Ningún módulo activo — el informe saldrá vacío</span>}
+      {grupos.map(g => {
+        const cs = alcanceDe(g);
+        return (
+          <div className="card" key={g.key}>
+            <div className="ct">{g.titulo}</div>
+            <p className="text-muted" style={{ marginBottom: 12 }}>{g.ayuda}</p>
+            {!g.clientes.length ? (
+              <div className="alrt aam">Todavía no tienes clientes en {g.area ? `esta área (${g.titulo})` : 'este grupo'}. Tu administrador los asigna en Clientes y asignaciones.</div>
+            ) : !cs.length ? (
+              <div className="alrt aam">{cliSel?.nom} no está en tu lista de {g.titulo}. Elige otro cliente o vuelve a Global.</div>
+            ) : (
+              <div className="mod-grid">
+                {g.mods.map(m => {
+                  const st = estadoDe(g, m.id);
+                  return (
+                    <label key={m.id} className={'mod-item' + (st.estado === 'todos' ? ' on' : st.estado === 'mixto' ? ' on mixed' : '')}>
+                      <Casilla estado={st.estado} label={`${m.label} en ${global ? 'todos mis clientes' : cliSel.nom}`}
+                        onChange={() => cambiar(g, m.id, st.estado !== 'todos')} />
+                      <span className="mod-ico" aria-hidden="true">{m.icon}</span>
+                      <span className="mod-txt">
+                        <span className="mod-n">{m.label}</span>
+                        <span className="mod-d">
+                          {st.estado === 'mixto'
+                            ? `En ${st.n} de ${st.total} · no va en ${st.faltan.slice(0, 2).map(c => c.nom).join(', ')}${st.faltan.length > 2 ? ` y ${st.faltan.length - 2} más` : ''}`
+                            : m.desc}
+                        </span>
+                      </span>
+                      <span className={'chip ' + (st.estado === 'todos' ? 'vd' : st.estado === 'mixto' ? 'am' : '')}>
+                        {st.estado === 'todos' ? 'Incluido' : st.estado === 'mixto' ? 'Parcial' : 'Omitido'}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {grupos.filter(g => g.clientes.length).map(g => (
+        <div className="card" key={'mx-' + g.key}>
+          <div className="ct">Cliente por cliente — {g.titulo}</div>
+          <p className="text-muted" style={{ marginBottom: 10 }}>Una fila por cliente y una casilla por módulo: marca o quita cualquier excepción sin cambiar de vista.</p>
+          <div className="mx-wrap">
+            <table className="mx">
+              <thead>
+                <tr>
+                  <th scope="col" className="mx-cli">Cliente</th>
+                  {g.mods.map(m => <th scope="col" key={m.id}><span aria-hidden="true">{m.icon}</span> {m.label}</th>)}
+                  <th scope="col">Fila</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...g.clientes].sort((a, b) => a.nom.localeCompare(b.nom)).map(c => {
+                  const todas = g.mods.every(m => ON(objetivoId, c.id, m.id));
+                  return (
+                    <tr key={c.id} className={!global && cliSel.id === c.id ? 'mx-sel' : ''}>
+                      <th scope="row" className="mx-cli">{c.nom}</th>
+                      {g.mods.map(m => (
+                        <td key={m.id}>
+                          <input type="checkbox" checked={ON(objetivoId, c.id, m.id)}
+                            aria-label={`${m.label} en ${c.nom}`}
+                            onChange={() => { setModulosEnClientes(objetivoId, [c.id], [m.id], !ON(objetivoId, c.id, m.id), {}); refrescar(`Guardado: ${m.label} ${ON(objetivoId, c.id, m.id) ? 'ahora va' : 'ya no va'} en ${c.nom}${fin(c.nom)}`); }} />
+                        </td>
+                      ))}
+                      <td><button type="button" className="link-btn" onClick={() => cambiarFila(g, c, !todas)}>{todas ? 'Quitar todo' : 'Poner todo'}</button></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div style={{ fontSize: 11, color: '#0F6B33', marginTop: 8 }}>{activeCount} módulos se incluirán en el PDF/HTML para <strong>{targetUser?.nom}</strong>. La próxima vez que <strong>{targetUser?.nom}</strong> entre a <strong>Nuevo informe</strong>, ya verá esta configuración cargada.</div>
-      </div>
+      ))}
     </div>
   );
 }

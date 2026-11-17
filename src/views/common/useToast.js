@@ -1,17 +1,21 @@
 /**
  * views/common/useToast.js
  * ─────────────────────────────────────────────────────────────────────────
- * The toast context + hook, split out from `Toast.jsx` so that file only
- * exports the `ToastProvider` component (a non-component export like this
- * hook in the same file breaks React Fast Refresh for that component).
+ * Contextos y hooks de retroalimentación al usuario (toast y confirmación).
+ * Los provee `UIProvider` (montado una sola vez en `App.jsx`).
  *
- * Call `useToast()` from any component under `<ToastProvider>` (mounted
- * once in `App.jsx`) to get a `toast(message)` function.
+ *   const toast = useToast();       toast('Guardado'); toast('No se pudo', 'error');
+ *   const confirmar = useConfirm(); if (await confirmar({ message: '¿Eliminar?', danger: true })) …
  */
 import { createContext, useContext } from 'react';
 
-export const ToastContext = createContext(null);
+export const ToastContext = createContext(() => {});
+export const ConfirmContext = createContext(async () => false);
 
 export function useToast() {
   return useContext(ToastContext);
+}
+
+export function useConfirm() {
+  return useContext(ConfirmContext);
 }

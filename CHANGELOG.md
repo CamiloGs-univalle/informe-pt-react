@@ -1,5 +1,84 @@
 # Changelog
 
+## [Sin publicar] — SST completo, aprobación y envío por correo
+
+### SST: los módulos de SST ahora sí se reportan y se ven
+- Formulario de SST con un bloque por cada módulo activo: **Tasa de accidentalidad por sede** (accidentes y personas expuestas; la tasa la calcula el sistema), **Severidad** (días perdidos por AT y accidentes con incapacidad) e **Investigación de AT** (por investigar, investigados, a tiempo).
+- Informe HTML: la pestaña «Seguridad y salud» tiene una sección por módulo (tasa por sede con meta 1 %, severidad, investigación con cumplimiento), tarjetas en el resumen, mensajes «va bien / vigilar / sigue», explicación didáctica y glosario. Se compara con el mes anterior.
+- PPTX: las diapositivas de tasa, severidad e investigación usan los datos reales (antes usaban días de enfermedad general y el personal activo). Los casos médicos se muestran con el módulo SST.
+- **Excel / ISSA (cargas masivas):** al subir el ISSA se llenan solos los módulos de SST: tasa por sede (Nacional, Cauca, Santander… las filas se buscan por nombre), días perdidos por AT e investigación de accidentes. Se arregló que la lectura del ISSA devolvía todo en 0 y que los «días de enfermedad general» tomaban el resultado de severidad. La plantilla completa trae las columnas nuevas y la hoja «SST Sedes». Lo escrito a mano de otros módulos no se pierde (`fusionarSST`).
+
+### Aprobación del administrador y envío por correo
+- Informes guardados: un administrador (de su equipo) o super admin **aprueba** el informe (`aprobacion {estado, por, porNom, ts}`); puede quitar la aprobación.
+- El ejecutivo ve el botón **«Enviar por correo»** cuando el informe está aprobado. Abre una ventana con destinatarios, asunto y mensaje ya escritos (con lo más destacado del mes) y deja el correo listo con el PDF y/o HTML adjuntos: borrador en Gmail (API `gmail.compose`, solo crea borradores) o archivo `.eml` para Outlook. La persona pulsa «Enviar».
+- Queda constancia del envío (`envios[]`) y los destinatarios pueden recordarse en el cliente (`correos`).
+- `VITE_EXIGIR_APROBACION=false` quita la exigencia de aprobación.
+- `firestore.rules`: solo un administrador puede poner o cambiar `aprobacion` en un informe.
+- Requisitos de Google: habilitar la API de Gmail en el proyecto de Google Cloud y agregar el permiso `gmail.compose` en la pantalla de consentimiento OAuth.
+
+## [Sin publicar] — Reporte HTML nuevo para el cliente final (noviembre 2026)
+
+- **Resumen ejecutivo**: titular del mes («Buen mes, con 5 puntos para vigilar»), semáforos con texto y símbolo (no solo color), una tarjeta por indicador con su meta, su cambio frente al mes anterior y «ⓘ ¿Qué es?», tres columnas «Va bien / Hay que vigilar / Lo que sigue» en lenguaje simple, panel «¿Dónde estamos frente a la meta?», comparativo con el mes anterior, «Cómo leer este informe» y glosario.
+- **Cada sección** (selección, personal, rotación, SST, nómina, ausentismo, formación, clima, facturación, actividades): pregunta guía, «En una frase», cifras, gráficas con explicación al pasar el mouse / enfocar / tocar (medidor con la meta dibujada, dona, barras con marca de meta, cascada de personal), tablas y un «¿Qué significa y cómo se calcula?» plegable.
+- **Mes anterior**: el informe busca el último informe guardado anterior del mismo cliente (`informeController.informePrevio`) y compara con las mismas reglas. Un módulo que ese mes no se reportaba no se compara.
+- **Sin datos ≠ cero**: movimiento de personal, clima y facturación en cero se muestran como «Sin datos este mes» (nunca en verde/rojo); un informe totalmente vacío dice «Todavía no hay cifras cargadas».
+- **Un solo archivo, sin internet**: se lee en el correo, se imprime (todas las secciones seguidas, una por página) y el PDF de la app ahora incluye **todas** las secciones (antes solo la pestaña activa), en hoja vertical.
+- Seguridad: todo texto escrito por personas (observaciones, causas, motivos, agencia, casos médicos…) pasa por `esc()`; antes varios campos entraban sin escapar.
+- Se quitó el «Mortales 0» que el reporte mostraba sin que nadie lo hubiera registrado. Estilos del reporte aislados bajo `.rpt` (ya no pisan los de la app al exportar a PDF).
+- Código: `services/reportMetrics.js` (cifras y mensajes), `reportCharts.js` (gráficas), `reportStyles.js` (CSS y script), `htmlReport.service.js` (armado). `chart.service.js` quedó sin uso.
+- Los informes ya guardados conservan su HTML anterior; el diseño nuevo aplica a los que se generen desde ahora.
+
+## [Sin publicar] — Mis módulos por cliente y conteos únicos (noviembre 2026)
+
+- **Mis módulos** (antes «Módulos del informe»): vista Global (todos mis clientes: una casilla cambia el módulo en todos; queda a medias si no va igual, y dice en cuántos y en cuál falta) o de un solo cliente; tarjetas «Módulos activos X/Y», «Cliente seleccionado» y «Usuario»; «Activar todo / Desactivar todo» (desactivar pide confirmación); tabla «Cliente por cliente» con una casilla por módulo y atajo por fila. Todo se guarda al instante. Ahora también lo usan las personas de área (deciden qué módulos de su área reportan en cada cliente), no solo los líderes.
+- Regla única `moduloIncluido` (líder **y** área): la usan el formulario del aporte, el tablero, el informe, el Inicio y los pendientes. Un área sin módulos activos para un cliente ya no genera tarea.
+- Conteos de pendientes: Inicio del trabajador, Mis aportes y avance del equipo usan la misma definición (`tareasDe`); antes el Inicio inventaba tareas por área cuando no había asignaciones.
+- Panel del admin: el avance suma informes que lidera + partes que entrega; «atrasado» se compara con lo normal para el día del mes (el día 4 nadie sale en rojo); primero aparecen las personas con trabajo asignado; mensaje «N entregas pendientes en el equipo».
+- Inicio del ejecutivo: el bloque de módulos ahora muestra en cuántos clientes va cada uno (antes mostraba solo la configuración global).
+- Reglas por rol de Firestore (`perfiles`), `npm run perfiles` y `npm run restaurar` (ver CLAUDE.md).
+- Sincronización: ahora solo se escribe lo que cambió (antes se re-subía toda la base en cada guardado).
+- No incluido: campos numéricos vacíos en vez de 0 (toca todos los consumidores del informe), historial por cliente de cambios de módulos e indicadores propios por cliente.
+
+## [Sin publicar] — Revisión integral de calidad, diseño y lógica (octubre 2026)
+
+Auditoría como usuario final exigente, QA y diseño UX/UI, probando cada rol (super admin, admin,
+ejecutivo líder, trabajador de área). Detalle de hallazgos en `docs/INFORME-QA-UX.md`.
+
+### Diseño (manteniendo la identidad Proservis)
+- Nuevo sistema de diseño (`assets/styles/app.css`): encabezados de página, tarjetas KPI, tablas,
+  chips, modales, toasts, confirmaciones propias, estados vacíos con acción.
+- Textos sin cortes (se eliminaron los `…` en nombres), tamaño mínimo 11px, encabezado responsive.
+- Números con separador de miles y decimales es-CO en toda la app, informes HTML y PPTX; selector de
+  mes propio (‹ Mes Año ›) en lugar de `<input type="month">`.
+- Pantalla de login, splash de carga y manejo claro de "sin conexión".
+
+### Lógica y funciones
+- Roles y alcance centralizados (`models/Alcance.js`): cada persona ve solo lo que le corresponde;
+  menú y rutas por capacidad. «Ver como» del super admin.
+- «Mis aportes» y «Tablero del equipo» rehechos: formularios reales por módulo, guardar borrador,
+  enviar/retirar, validar o devolver con motivo, vista previa, guardar informe sin duplicar.
+- «Módulos del informe» global y por cliente, con restablecer; el PPTX ahora respeta los módulos
+  activos y suma capacitación, clima y facturación (antes los ignoraba).
+- «Personas», «Gestionar clientes», «Espacios y áreas» y «Datos y cargas» rehechos: confirmaciones
+  con consecuencias, validaciones (correo/NIT duplicados), áreas dinámicas (sin ids quemados), opción
+  «lidera el informe final» por área, paginación, cargas CSV con vista previa.
+- Borrado en cascada de clientes, áreas y espacios (sin huérfanos). Editar un cliente ya no borra
+  sus asignaciones por área.
+
+### Ver como
+- El super admin puede entrar al perfil de **cualquier** persona (también inactivas) desde el selector del encabezado (agrupado por rol) o con el botón «Ver como» en Personas y en Mi equipo, y ve exactamente lo que esa persona ve. Banner permanente con «Volver a mi cuenta».
+- `firestore.rules` reescrito: el anterior no compilaba en la consola de Firebase (usaba `if`/`return` y consultas que las reglas no soportan).
+
+### Correcciones
+- **IDs duplicados** al crear varios registros en el mismo milisegundo (cargas masivas): ahora `nuevoId`.
+- El informe HTML no escapaba texto libre (un `<` rompía el diseño o inyectaba HTML): ahora se escapa.
+- El PPTX fallaba si un RQ no tenía código ni cargo.
+- Se retiró el panel SortTime que traía credenciales y una extracción simulada; ahora es un enlace
+  configurable (`VITE_SORTTIME_URL`).
+- Se retiró «Borrar todo + crear super admin» (con contraseña fija) y las contraseñas de las cargas
+  masivas y del README.
+- Carga inicial: bundle principal de 2,9 MB a 0,86 MB (rutas y librerías de exportación bajo demanda).
+
 ## [Sin publicar] — "Mi equipo": rediseño como equipo real, no tabla plana (septiembre 2026)
 
 Rediseño completo del módulo "Mi equipo" pedido explícitamente: más diseño, que se sienta como
@@ -317,11 +396,11 @@ salvo donde el comportamiento anterior era, precisamente, el bug.
   comparaba contra `'AT'` cuando el valor real es `'AT laboral'`, así que nunca coloreaba ese
   caso correctamente. Corregido y verificado.
 - **Hueco de seguridad: contraseña maestra en el login local.**
-  `models/Ejecutivo.js#authenticateLocal` aceptaba `123456` o `Proservis2026` como contraseña
+  `models/Ejecutivo.js#authenticateLocal` aceptaba dos contraseñas fijas como contraseña
   válida para **cualquier** usuario, sin importar su contraseña real guardada — en la práctica,
   una puerta trasera. Ahora solo se acepta la contraseña real de cada Ejecutivo. Las cuentas demo
-  documentadas (`Proservis2026`) siguen funcionando igual porque es su contraseña real de
-  semilla; se actualizó el texto de ayuda en la pantalla de login que mencionaba `123456`.
+  documentadas siguen funcionando igual porque era su contraseña real de
+  semilla; se actualizó el texto de ayuda en la pantalla de login que mencionaba una de ellas.
 
 ### Eliminado (deuda técnica resuelta)
 

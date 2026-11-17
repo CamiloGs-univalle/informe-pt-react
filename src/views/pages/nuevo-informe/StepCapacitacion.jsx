@@ -23,7 +23,7 @@ export default function StepCapacitacion({ capacitacion, setCapacitacion, addIte
           </div>
         </div>
       ))}
-      {(c.temas || []).length === 0 && <div style={{ fontSize: 11, color: 'var(--grt)', background: 'var(--gr)', padding: 10, borderRadius: 8, textAlign: 'center' }}>Sin temas aún. Agrega los cursos del mes.</div>}
+      {(c.temas || []).length === 0 && <div style={{ fontSize: 12, color: 'var(--grt)', background: 'var(--gr)', padding: 10, borderRadius: 8, textAlign: 'center' }}>Sin temas aún. Agrega los cursos del mes.</div>}
       <div style={{ marginTop: 10 }}><label className="flabel">Observaciones</label><textarea className="finput" value={c.obs || ''} onChange={e => upd('obs', e.target.value)} placeholder="Próximas capacitaciones, logros..." /></div>
     </div>
   );

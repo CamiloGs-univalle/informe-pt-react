@@ -1,144 +1,95 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Super Admin email (hardcoded for reliable check)
-    function isSuperAdminEmail() {
-      return request.auth != null && request.auth.token.email == 'auxiliar.ti@proservis.com.co';
+
+    // ── Quién es quién ───────────────────────────────────────────────────
+    // Las reglas no pueden hacer consultas, y los ids de `ejecutivos` (e1, e2…)
+    // no son el uid de Firebase Auth. Por eso el rol se lee de
+    // perfiles/<correo en minúsculas>, un documento que la app (y el script
+    // `npm run perfiles`) mantiene sincronizado con `ejecutivos`.
+    function esPersonal() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower().matches('.*@proservis[.](com[.])?co');
     }
-    
-    // Helper: get current user's role from their document
-    // Uses email to find the user document since doc ID != auth UID
-    function getUserRole() {
-      // Get the user document by querying where email matches
-      // Note: rules can't query, so we use a convention:
-      // The user document ID is stored in a helper or we check email
-      // For now, check if there's a user with this email in ejecutivos
-      // This is a simplified check - in production you'd want a mapping collection
-      let userData = get(/databases/$(database)/documents/ejecutivos/$(request.auth.uid)).data;
-      if (userData != null && userData.email == request.auth.token.email) {
-        return userData.role;
-      }
-      // Fallback: check by email in a known location or return default
-      return 'usuario';
+    function miPerfil() {
+      return /databases/$(database)/documents/perfiles/$(request.auth.token.email.lower());
     }
-    
-    function isSuperAdmin() {
-      return isSuperAdminEmail() || getUserRole() == 'super_admin';
+    function tienePerfil() {
+      return esPersonal() && exists(miPerfil()) && get(miPerfil()).data.activo != false;
     }
-    
-    function isAdmin() {
-      return getUserRole() == 'admin' || isSuperAdmin();
+    function rol() {
+      return get(miPerfil()).data.role;
     }
-    
-    function isAuthenticated() {
-      return request.auth != null;
+    function esSuper() { return tienePerfil() && rol() == 'super_admin'; }
+    function esAdmin() { return tienePerfil() && (rol() == 'admin' || rol() == 'super_admin'); }
+
+    // ── Lectura ──────────────────────────────────────────────────────────
+    // La app carga todas las colecciones al entrar y filtra por rol en pantalla,
+    // así que cualquier persona de la empresa puede leer. (Si luego se quiere
+    // ocultar datos por rol en la propia base, hay que cambiar cómo se cargan.)
+    //
+    // ── Escritura ────────────────────────────────────────────────────────
+    //  • workspaces y areas: solo super admin.
+    //  • ejecutivos y perfiles: super admin sin límite; admin puede gestionar
+    //    personas pero nunca crear, editar ni borrar a un super admin.
+    //  • clientes, informes, contribuciones, moduloConfigs: cualquier persona
+    //    activa con perfil (el ejecutivo líder y los trabajadores de área
+    //    editan ahí); borrar clientes solo admin.
+
+    match /perfiles/{correo} {
+      allow read: if esPersonal();
+      allow create: if esSuper() || (esAdmin() && request.resource.data.role != 'super_admin');
+      allow update: if esSuper() || (esAdmin() && resource.data.role != 'super_admin' && request.resource.data.role != 'super_admin');
+      allow delete: if esSuper() || (esAdmin() && resource.data.role != 'super_admin');
     }
-    
-    // Get user's workspaceId
-    function getUserWorkspaceId() {
-      let userData = get(/databases/$(database)/documents/ejecutivos/$(request.auth.uid)).data;
-      if (userData != null && userData.workspaceId != null) {
-        return userData.workspaceId;
-      }
-      return 'w1';
+
+    match /ejecutivos/{id} {
+      allow read: if esPersonal();
+      allow create: if esSuper() || (esAdmin() && request.resource.data.role != 'super_admin');
+      allow update: if esSuper() || (esAdmin() && resource.data.role != 'super_admin' && request.resource.data.role != 'super_admin');
+      allow delete: if esSuper() || (esAdmin() && resource.data.role != 'super_admin');
     }
-    
-    // User can read their own document, super_admin reads all
-    match /ejecutivos/{userId} {
-      allow read: if isAuthenticated() && (
-        request.auth.uid == userId || 
-        isSuperAdmin() || 
-        isAdmin()
-      );
-      allow write: if isSuperAdmin();
+
+    match /workspaces/{id} {
+      allow read: if esPersonal();
+      allow write: if esSuper();
     }
-    
-    // Clientes: visible to assigned ejecutivo, area users, and admins
-    match /clientes/{cliId} {
-      allow read: if isAuthenticated() && (
-        // Super admin sees all
-        isSuperAdmin() ||
-        // Admin sees all in their workspace
-        (isAdmin() && resource.data.workspaceId == getUserWorkspaceId()) ||
-        // Ejecutivo assigned to client
-        resource.data.ejId == request.auth.uid ||
-        // User assigned to client area
-        (resource.data.asignaciones != null && request.auth.uid in resource.data.asignaciones)
-      );
-      allow create: if isAdmin() || isSuperAdmin();
-      allow update: if isAdmin() || isSuperAdmin() || 
-        (resource.data.ejId == request.auth.uid && request.resource.data.ejId == resource.data.ejId);
-      allow delete: if isSuperAdmin();
+
+    match /areas/{id} {
+      allow read: if esPersonal();
+      allow write: if esSuper();
     }
-    
-    // Informes: owner + admins + super_admin
-    match /informes/{infId} {
-      allow read: if isAuthenticated() && (
-        isSuperAdmin() ||
-        (isAdmin() && resource.data.workspaceId == getUserWorkspaceId()) ||
-        resource.data.ejId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        resource.data.ejId == request.auth.uid || isAdmin() || isSuperAdmin()
-      );
-      allow update: if isAuthenticated() && (
-        resource.data.ejId == request.auth.uid || isAdmin() || isSuperAdmin()
-      );
-      allow delete: if isSuperAdmin();
+
+    match /clientes/{id} {
+      allow read: if esPersonal();
+      allow create, update: if tienePerfil();
+      allow delete: if esAdmin();
     }
-    
-    // Workspaces: super_admin only
-    match /workspaces/{wsId} {
-      allow read: if isAuthenticated();
-      allow write: if isSuperAdmin();
+
+    // La aprobación de un informe (campo `aprobacion`) solo la puede poner o quitar un administrador;
+    // el resto de campos los edita cualquier persona activa con perfil.
+    function aprobacionIgual() {
+      return request.resource.data.get('aprobacion', null) == resource.data.get('aprobacion', null);
     }
-    
-    // Areas: super_admin writes, everyone reads their workspace
-    match /areas/{areaId} {
-      allow read: if isAuthenticated() && (
-        isSuperAdmin() ||
-        resource.data.workspaceId == getUserWorkspaceId()
-      );
-      allow write: if isSuperAdmin();
+    match /informes/{id} {
+      allow read: if esPersonal();
+      allow create: if tienePerfil() && (esAdmin() || request.resource.data.get('aprobacion', null) == null);
+      allow update: if tienePerfil() && (esAdmin() || aprobacionIgual());
+      allow delete: if tienePerfil();
     }
-    
-    // ModuloConfigs: user owns their config, super_admin all
-    match /moduloConfigs/{configId} {
-      allow read: if isAuthenticated() && (
-        configId == request.auth.uid || 
-        configId.matches(request.auth.uid + '_.*') ||
-        isSuperAdmin()
-      );
-      allow write: if isAuthenticated() && (
-        configId == request.auth.uid || 
-        configId.matches(request.auth.uid + '_.*') ||
-        isSuperAdmin()
-      );
+
+    match /contribuciones/{id} {
+      allow read: if esPersonal();
+      allow write: if tienePerfil();
     }
-    
-    // Contribuciones: area users + ejecutivo + admins
-    match /contribuciones/{ctId} {
-      allow read: if isAuthenticated() && (
-        isSuperAdmin() ||
-        (isAdmin() && resource.data.workspaceId == getUserWorkspaceId()) ||
-        resource.data.userId == request.auth.uid ||
-        // Ejecutivo sees all contributions for their clients
-        exists(/databases/$(database)/documents/clientes/$(resource.data.cliId)) &&
-        get(/databases/$(database)/documents/clientes/$(resource.data.cliId)).data.ejId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin() || isSuperAdmin()
-      );
-      allow update: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin() || isSuperAdmin()
-      );
-      allow delete: if isSuperAdmin();
+
+    match /moduloConfigs/{id} {
+      allow read: if esPersonal();
+      allow write: if tienePerfil();
     }
-    
-    // Default deny
+
+    // Todo lo demás, cerrado.
     match /{document=**} {
       allow read, write: if false;
     }

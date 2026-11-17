@@ -32,9 +32,9 @@ export function Gauge({ pct, size = 60, stroke = 7, label }) {
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={col} strokeWidth={stroke} strokeLinecap="round"
           strokeDasharray={c} strokeDashoffset={off} style={{ transition: 'stroke-dashoffset .6s ease' }} />
         <text x="50%" y="50%" dominantBaseline="middle" textAnchor="middle"
-          style={{ transform: 'rotate(90deg)', transformOrigin: 'center', fontSize: Math.round(size * 0.23), fontWeight: 800, fill: col }}>{Math.round(safePct)}%</text>
+          style={{ transform: 'rotate(90deg)', transformOrigin: 'center', fontSize: Math.max(11, Math.round(size * 0.23)), fontWeight: 800, fill: col }}>{Math.round(safePct)}%</text>
       </svg>
-      {label && <span style={{ fontSize: 10, color: 'var(--grt)', fontWeight: 700, textAlign: 'center' }}>{label}</span>}
+      {label && <span style={{ fontSize: 11, color: 'var(--grt)', fontWeight: 700, textAlign: 'center' }}>{label}</span>}
     </div>
   );
 }
@@ -60,12 +60,12 @@ export function Delta({ current, previous, dark = false }) {
   if (previous == null) return null;
   const diff = current - previous;
   const flatColor = dark ? 'rgba(255,255,255,.7)' : 'var(--grt)';
-  if (diff === 0) return <span style={{ fontSize: 10, color: flatColor, fontWeight: 700 }}>Igual que el mes anterior</span>;
+  if (diff === 0) return <span style={{ fontSize: 11, color: flatColor, fontWeight: 700 }}>Igual que el mes anterior</span>;
   const up = diff > 0;
   const upColor = dark ? '#6FCF97' : '#168A43';
   const downColor = dark ? '#FF8A80' : '#C0392B';
   return (
-    <span style={{ fontSize: 10, fontWeight: 800, color: up ? upColor : downColor, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+    <span style={{ fontSize: 11, fontWeight: 800, color: up ? upColor : downColor, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
       {up ? '▲' : '▼'} {Math.abs(diff)} vs. mes anterior
     </span>
   );
@@ -105,7 +105,7 @@ export function TrendChart({ months }) {
               {hover === i && (
                 <div style={{
                   position: 'absolute', bottom: h + 30, left: '50%', transform: 'translateX(-50%)',
-                  background: 'var(--osc)', color: '#fff', fontSize: 11, fontWeight: 700, padding: '6px 10px',
+                  background: 'var(--osc)', color: '#fff', fontSize: 12, fontWeight: 700, padding: '6px 10px',
                   borderRadius: 6, whiteSpace: 'nowrap', zIndex: 5, boxShadow: '0 3px 10px rgba(0,0,0,.2)',
                   display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center',
                 }}>
@@ -117,15 +117,15 @@ export function TrendChart({ months }) {
               <div style={{
                 height: h, background: m.cnt > 0 ? 'linear-gradient(180deg, ' + GREEN + ' 0%, ' + GREEN_SOFT + ' 100%)' : TRACK,
                 borderRadius: '6px 6px 3px 3px', display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-                paddingTop: 4, color: m.cnt > 0 ? '#fff' : 'var(--grt)', fontWeight: 800, fontSize: 11,
+                paddingTop: 4, color: m.cnt > 0 ? '#fff' : 'var(--grt)', fontWeight: 800, fontSize: 12,
                 cursor: 'default', transition: 'opacity .15s', opacity: hover === null || hover === i ? 1 : .55,
               }}>{m.cnt}</div>
-              <div style={{ fontSize: 10, color: 'var(--grt)', marginTop: 5, textTransform: 'capitalize', fontWeight: hover === i ? 800 : 500 }}>{m.label}</div>
+              <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 5, textTransform: 'capitalize', fontWeight: hover === i ? 800 : 500 }}>{m.label}</div>
             </div>
           );
         })}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--grb)', fontSize: 11, color: 'var(--grt)', flexWrap: 'wrap', gap: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--grb)', fontSize: 12, color: 'var(--grt)', flexWrap: 'wrap', gap: 6 }}>
         <span>Total del período: <strong style={{ color: 'var(--vd)' }}>{total}</strong> informes</span>
         <span style={{ fontWeight: 700, color: trendUp ? '#168A43' : '#9A7A10' }}>{trendUp ? '▲ En crecimiento' : '▼ En descenso'} vs. la primera mitad</span>
       </div>
@@ -141,11 +141,11 @@ export function BarList({ items, valueSuffix = '', color = GREEN, emptyText = 'S
     <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
       {items.map((it) => (
         <div key={it.label} style={{ display: 'grid', gridTemplateColumns: '1fr 3fr auto', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: 'var(--tx)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.icon ? it.icon + ' ' : ''}{it.label}</span>
+          <span style={{ fontSize: 12, color: 'var(--tx)', fontWeight: 600, overflowWrap: 'anywhere', lineHeight: 1.25 }}>{it.icon ? it.icon + ' ' : ''}{it.label}</span>
           <div style={{ height: 8, background: 'var(--gr)', borderRadius: 20, overflow: 'hidden' }}>
             <div style={{ height: '100%', width: Math.max(3, (it.value / max) * 100) + '%', background: it.color || color, borderRadius: 20, transition: 'width .4s ease' }} />
           </div>
-          <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--tx)', minWidth: 26, textAlign: 'right' }}>{it.value}{valueSuffix}</span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--tx)', minWidth: 26, textAlign: 'right' }}>{it.value}{valueSuffix}</span>
         </div>
       ))}
     </div>

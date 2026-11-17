@@ -25,9 +25,9 @@ export default function StepSeleccion({ seleccion, addRQ, removeRQ, updateRQ }) 
       <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:12}}>
         {ficha.map(f=> (
           <div key={f.label} style={{background:'#fff', border:'1px solid #E8EAE8', borderLeft:`4px solid ${f.color}`, borderRadius:8, padding:'10px', textAlign:'center'}}>
-            <div style={{fontSize:9, fontWeight:800, color:'var(--grt)', textTransform:'uppercase'}}>{f.label}</div>
+            <div style={{fontSize: 11, fontWeight:800, color:'var(--grt)', textTransform:'uppercase'}}>{f.label}</div>
             <div style={{fontSize:16, fontWeight:800, color:f.color, marginTop:4}}>{f.value}</div>
-            <div style={{fontSize:10, color:'var(--grt)'}}>{f.sub}</div>
+            <div style={{fontSize: 11, color:'var(--grt)'}}>{f.sub}</div>
           </div>
         ))}
       </div>

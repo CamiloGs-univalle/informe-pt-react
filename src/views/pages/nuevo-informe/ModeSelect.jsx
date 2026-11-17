@@ -1,33 +1,19 @@
-/**
- * views/pages/nuevo-informe/ModeSelect.jsx
- * ─────────────────────────────────────────────────────────────────────────
- * First screen of the wizard: choose "automático" (Drive/Excel) vs
- * "manual" (field by field). Purely presentational.
- */
+/** Primera pantalla del asistente: ¿subir archivos Excel o llenar campo por campo? */
 export default function ModeSelect({ onSelect }) {
   return (
-    <div>
-      <div className="ph">Nuevo informe mensual</div>
-      <div className="ps">Elige cómo quieres generar el informe</div>
-      <div className="modo-tabs">
-        <div className="modo-tab" onClick={() => onSelect('auto')}>
-          <span className="mt-ico">🚀</span>
-          <div className="mt-tit">Automático con Drive</div>
-          <div className="mt-sub">Conecta tu Google Drive o sube los Excel. El sistema extrae los datos automáticamente y genera el informe.</div>
-        </div>
-        <div className="modo-tab" onClick={() => onSelect('manual')}>
-          <span className="mt-ico">✏️</span>
-          <div className="mt-tit">Manual — Campo a campo</div>
-          <div className="mt-sub">Llena cada sección del formulario tú mismo. Ideal si no tienes archivos Excel o quieres control total.</div>
-        </div>
-      </div>
-      <div className="card">
-        <div className="ct">💡 ¿Cuál elegir?</div>
-        <div style={{ fontSize: 12, color: 'var(--grt)', lineHeight: 1.8 }}>
-          <strong>Automático:</strong> Rápido y preciso. Subes los Excel de Headcount, Selección, Rotación, SST y Nómina, y el sistema llena todo solo.<br/>
-          <strong>Manual:</strong> Control total. Llenas cada campo paso a paso, ideal para datos que no están en Excel.
-        </div>
-      </div>
+    <div className="grid-2">
+      <button type="button" className="mode-card" onClick={() => onSelect('auto')}>
+        <span className="mode-ico" aria-hidden="true">📊</span>
+        <span className="mode-t">Con archivos Excel</span>
+        <span className="mode-s">Sube los Excel (o tráelos de Google Drive) y el sistema extrae los datos. Después revisas y ajustas lo que haga falta.</span>
+        <span className="mode-go">Empezar con archivos →</span>
+      </button>
+      <button type="button" className="mode-card" onClick={() => onSelect('manual')}>
+        <span className="mode-ico" aria-hidden="true">✏️</span>
+        <span className="mode-t">Llenar a mano</span>
+        <span className="mode-s">Completa cada sección del informe paso a paso. Ideal si no tienes archivos o ya hay aportes de las áreas que quieres revisar.</span>
+        <span className="mode-go">Empezar a llenar →</span>
+      </button>
     </div>
   );
 }

@@ -7,6 +7,7 @@
  * See docs/MODEL.md for the full entity/field reference.
  */
 import { DB, saveDB } from './db';
+import { nuevoId } from '../utils/ids';
 
 /** Returns every Informe record. */
 export function getInfs() {
@@ -40,7 +41,7 @@ export function getInfCountForEj(ejId) {
 
 /** Saves a new Informe snapshot (informes are append-only / immutable). */
 export function saveInf(data) {
-  if (!data.id) data.id = 'i' + Date.now();
+  if (!data.id) data.id = nuevoId('i', DB.infs);
   if (!data.ts) data.ts = new Date().toISOString();
   DB.infs.push(data);
   saveDB();
@@ -66,3 +67,30 @@ export function updateInf(id, patch) {
   if (inf) { Object.assign(inf, patch); saveDB(); }
   return inf;
 }
+
+/** Aprueba un informe para su envío al cliente (lo hace un administrador). */
+export function aprobarInf(id, user, obs = '') {
+  const inf = DB.infs.find(i => i.id === id);
+  if (inf) { inf.aprobacion = { estado: 'aprobado', por: user?.id || '', porNom: user?.nom || '', ts: new Date().toISOString(), obs: String(obs || '').trim() }; saveDB(); }
+  return inf;
+}
+
+/** Retira la aprobación (el informe vuelve a quedar pendiente). */
+export function quitarAprobacionInf(id) {
+  const inf = DB.infs.find(i => i.id === id);
+  if (inf) { inf.aprobacion = null; saveDB(); }
+  return inf;
+}
+
+/** Deja constancia de que el ejecutivo envió (o dejó listo) el informe por correo. */
+export function registrarEnvioInf(id, user, { para = '', via = '' } = {}) {
+  const inf = DB.infs.find(i => i.id === id);
+  if (inf) {
+    inf.envios = [...(inf.envios || []), { ts: new Date().toISOString(), por: user?.id || '', porNom: user?.nom || '', para, via }];
+    saveDB();
+  }
+  return inf;
+}
+
+/** ¿El informe ya está aprobado? */
+export const estaAprobado = (inf) => inf?.aprobacion?.estado === 'aprobado';

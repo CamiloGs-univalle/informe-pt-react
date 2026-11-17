@@ -1,7 +1,0 @@
-/* src/style.css — MOVED
- * ───────────────────────────────────────────────────────────────────────
- * Relocated to src/assets/styles/global.css as part of the MVC
- * architecture migration (see CHANGELOG.md). This file is no longer
- * imported anywhere (App.jsx now imports the new path) and is kept only
- * as a placeholder; safe to delete.
- */

@@ -83,8 +83,11 @@ export function downloadPlantillaCompleta() {
   const selH = ['RQ PT', 'Agencia', 'Ciudad', 'Cargo', 'Solicitadas', 'Contratadas', 'Oportunidad %', 'Tiempo Respuesta (días)', 'Estado', 'Nota'];
   const selE = [['RQ-001', 'Cali', 'Cali', 'Operario', 5, 4, 80, 6, 'Cubierta', '']];
   const ws1 = XLSX.utils.aoa_to_sheet([selH, ...selE]); ws1['!cols']=selH.map(()=>({wch:14})); XLSX.utils.book_append_sheet(wb, ws1, 'Selección');
-  const sstH = ['AT', 'OC', 'Maternidad', 'EG', 'ARL', 'Inducciones']; const sstE=[[1,0,0,5,100,3]];
-  const ws2 = XLSX.utils.aoa_to_sheet([sstH, ...sstE]); XLSX.utils.book_append_sheet(wb, ws2, 'SST');
+  const sstH = ['AT', 'OC', 'Maternidad', 'EG', 'ARL', 'Inducciones', 'Días perdidos AT', 'Accidentes con incapacidad', 'Accidentes por investigar', 'Accidentes investigados', 'Investigados a tiempo']; const sstE=[[1,0,0,5,100,3,4,1,1,1,1]];
+  const ws2 = XLSX.utils.aoa_to_sheet([sstH, ...sstE]); ws2['!cols']=sstH.map(()=>({wch:18})); XLSX.utils.book_append_sheet(wb, ws2, 'SST');
+  // Tasa de accidentalidad: una fila por sede (Nacional = total de la empresa)
+  const sedH = ['Sede', 'AT', 'Personas expuestas']; const sedE=[['Nacional',1,70],['Cauca',0,7],['Santander',1,57]];
+  const ws2b = XLSX.utils.aoa_to_sheet([sedH, ...sedE]); ws2b['!cols']=sedH.map(()=>({wch:18})); XLSX.utils.book_append_sheet(wb, ws2b, 'SST Sedes');
   const hcH=['Activos inicio','Ingresos','Retiros']; const hcE=[[50,5,3]];
   const ws3 = XLSX.utils.aoa_to_sheet([hcH, ...hcE]); XLSX.utils.book_append_sheet(wb, ws3, 'Headcount');
   downloadWorkbook(wb, 'Plantilla_Completa_Todas_Las_Areas.xlsx');

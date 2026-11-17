@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Solo entra personal de Proservis con el correo verificado (Google lo verifica solo).
+    // La app ya limita qué ve y hace cada rol; estas reglas cierran la base de datos
+    // al mundo exterior. Si alguien usa un correo de otro dominio, agrégalo en la
+    // expresión regular de abajo.
+    function esPersonal() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower().matches('.*@proservis[.](com[.])?co');
+    }
+
+    match /ejecutivos/{id}      { allow read, write: if esPersonal(); }
+    match /clientes/{id}        { allow read, write: if esPersonal(); }
+    match /informes/{id}        { allow read, write: if esPersonal(); }
+    match /workspaces/{id}      { allow read, write: if esPersonal(); }
+    match /areas/{id}           { allow read, write: if esPersonal(); }
+    match /contribuciones/{id}  { allow read, write: if esPersonal(); }
+    match /moduloConfigs/{id}   { allow read, write: if esPersonal(); }
+
+    // Todo lo demás, cerrado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

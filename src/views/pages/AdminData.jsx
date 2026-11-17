@@ -1,440 +1,191 @@
 /**
- * AdminData.jsx
+ * views/pages/AdminData.jsx  (menú: "Datos y cargas")
  * ─────────────────────────────────────────────────────────────────────────
- * Administración de Datos: Limpieza total, Seed Super Admin, Carga Masiva
- * Solo visible para Super Admin
+ * Solo super admin. Carga masiva de clientes y personas desde CSV (con vista
+ * previa antes de guardar), respaldo descargable y sincronización manual.
+ * No incluye borrado total ni contraseñas.
  */
-import { useState } from 'react';
-import { useToast } from '../common/useToast';
-import { 
-  CLIENTE_TEMPLATE_CSV, 
-  EJECUTIVO_TEMPLATE_CSV,
-  getClienteTemplateInfo,
-  getEjecutivoTemplateInfo,
-  downloadClienteTemplate,
-  downloadEjecutivoTemplate,
-  uploadClientesCSV,
-  uploadEjecutivosCSV,
-  parseCSV
+import { useRef, useState } from 'react';
+import { DB, saveDBAsync } from '../../models/db';
+import {
+  COLUMNAS_CLIENTES, COLUMNAS_PERSONAS,
+  descargarPlantillaClientes, descargarPlantillaPersonas,
+  planClientes, aplicarClientes, planPersonas, aplicarPersonas,
 } from '../../utils/massUpload';
-import { cleanupAndSeed, onlyCleanup } from '../../scripts/cleanupAndSeed';
-import { getEjs } from '../../models/Ejecutivo';
-import { getClis } from '../../models/Cliente';
-import { saveDB } from '../../models/db';
+import { fmtNum, fmtSize, plural, fmtFechaHora } from '../../utils/format';
+import { useToast, useConfirm } from '../common/useToast';
+import PageHeader from '../common/PageHeader';
+import EmptyState from '../common/EmptyState';
+
+const ACCION = { crear: ['vd', 'Se creará'], actualizar: ['am', 'Se actualizará'], error: ['ro', 'Con error'] };
+
+/** Tarjeta de importación: elegir archivo → vista previa → confirmar. */
+function ImportCard({ titulo, icono, intro, columnas, plantilla, planear, aplicar, objeto }) {
+  const toast = useToast();
+  const confirmar = useConfirm();
+  const inputRef = useRef(null);
+  const [archivo, setArchivo] = useState(null);
+  const [plan, setPlan] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const [verCols, setVerCols] = useState(false);
+
+  const limpiar = () => { setArchivo(null); setPlan(null); if (inputRef.current) inputRef.current.value = ''; };
+
+  const elegir = (ev) => {
+    const f = ev.target.files?.[0];
+    if (!f) return;
+    setResultado(null);
+    const lector = new FileReader();
+    lector.onload = () => {
+      try {
+        const p = planear(String(lector.result));
+        if (!p.total) { toast('El archivo no tiene filas. Revisa que la primera fila sean los encabezados.', 'error'); limpiar(); return; }
+        setArchivo(f); setPlan(p);
+      } catch (e) { toast('No se pudo leer el archivo: ' + e.message, 'error'); limpiar(); }
+    };
+    lector.onerror = () => toast('No se pudo leer el archivo.', 'error');
+    lector.readAsText(f);
+  };
+
+  const importar = async () => {
+    const n = plan.crear + plan.actualizar;
+    const ok = await confirmar({
+      title: `Importar ${plural(n, objeto)}`,
+      message: `Se crearán ${plural(plan.crear, 'registro nuevo', 'registros nuevos')} y se actualizarán ${plural(plan.actualizar, 'existente', 'existentes')}.${plan.errores ? ` Las ${plural(plan.errores, 'fila con error', 'filas con error')} se omitirán.` : ''}`,
+      confirmLabel: 'Importar',
+    });
+    if (!ok) return;
+    const r = aplicar(plan);
+    setResultado(r); limpiar();
+    toast(`Listo: ${plural(r.creados, 'creado')}, ${plural(r.actualizados, 'actualizado')}.`);
+  };
+
+  return (
+    <section className="card imp-card">
+      <h2 className="imp-t"><span aria-hidden="true">{icono}</span> {titulo}</h2>
+      <p className="text-muted">{intro}</p>
+      <div className="row-acts" style={{ marginBottom: 12 }}>
+        <button type="button" className="btn bgh bsm" onClick={plantilla}>Descargar plantilla</button>
+        <button type="button" className="btn bgh bsm" onClick={() => setVerCols(v => !v)} aria-expanded={verCols}>{verCols ? 'Ocultar columnas' : 'Ver columnas'}</button>
+      </div>
+      {verCols && (
+        <div className="tbl-wrap" style={{ marginBottom: 12 }}>
+          <table className="tbl">
+            <thead><tr><th>Columna</th><th>Obligatoria</th><th>Qué lleva</th></tr></thead>
+            <tbody>{columnas.map(c => <tr key={c.key}><td><code>{c.key}</code></td><td>{c.req ? 'Sí' : 'No'}</td><td>{c.desc}</td></tr>)}</tbody>
+          </table>
+        </div>
+      )}
+
+      <label className="file-pick">
+        <input ref={inputRef} type="file" accept=".csv,.txt,text/csv" onChange={elegir} />
+        <span className="btn bvd bsm" aria-hidden="true">Elegir archivo CSV</span>
+        <span className="text-muted">{archivo ? `${archivo.name} · ${fmtSize(archivo.size)}` : 'Ningún archivo seleccionado'}</span>
+      </label>
+
+      {plan && (
+        <div style={{ marginTop: 14 }}>
+          <div className="imp-sum">
+            <span className="chip vd">{plural(plan.crear, 'nuevo')}</span>
+            <span className="chip am">{plural(plan.actualizar, 'por actualizar', 'por actualizar')}</span>
+            <span className={'chip ' + (plan.errores ? 'ro' : '')}>{plural(plan.errores, 'con error', 'con errores')}</span>
+          </div>
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead><tr><th className="num">Fila</th><th>Nombre</th><th>Qué pasará</th><th>Observaciones</th></tr></thead>
+              <tbody>
+                {plan.filas.slice(0, 100).map(f => (
+                  <tr key={f.n} className={f.accion === 'error' ? 'row-bad' : ''}>
+                    <td className="num">{f.n}</td>
+                    <td>{f.nombre}</td>
+                    <td><span className={'chip ' + ACCION[f.accion][0]}>{ACCION[f.accion][1]}</span></td>
+                    <td>{[...f.errores, ...f.avisos].join(' ') || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {plan.total > 100 && <div className="text-muted" style={{ marginTop: 6 }}>Se muestran las primeras 100 de {fmtNum(plan.total)} filas; se importan todas.</div>}
+          <div className="brow">
+            <button type="button" className="btn bvd" onClick={importar} disabled={!plan.crear && !plan.actualizar}>
+              {plan.crear + plan.actualizar ? `Importar ${plural(plan.crear + plan.actualizar, objeto)}` : 'No hay filas válidas'}
+            </button>
+            <button type="button" className="btn bgh" onClick={limpiar}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {resultado && (
+        <div className="alrt avd" style={{ marginTop: 14 }} role="status">
+          <strong>Importación terminada.</strong> {plural(resultado.creados, 'creado')} · {plural(resultado.actualizados, 'actualizado')}{resultado.omitidos ? ` · ${plural(resultado.omitidos, 'omitido')}` : ''}.
+          {resultado.fallos?.length > 0 && <ul style={{ margin: '6px 0 0 18px' }}>{resultado.fallos.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function AdminData({ user }) {
   const toast = useToast();
-  const isSuper = user?.role === 'super_admin';
-  
-  // Limpieza
-  const [cleanupConfirm, setCleanupConfirm] = useState(false);
-  const [cleanupLoading, setCleanupLoading] = useState(false);
-  
-  // Seed
-  const [seedLoading, setSeedLoading] = useState(false);
-  
-  // Carga masiva clientes
-  const [cliFile, setCliFile] = useState(null);
-  const [cliPreview, setCliPreview] = useState(null);
-  const [cliUploading, setCliUploading] = useState(false);
-  const [cliResult, setCliResult] = useState(null);
-  
-  // Carga masiva ejecutivos
-  const [ejFile, setEjFile] = useState(null);
-  const [ejPreview, setEjPreview] = useState(null);
-  const [ejUploading, setEjUploading] = useState(false);
-  const [ejResult, setEjResult] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [ultima, setUltima] = useState(null);
 
-  const handleCliFile = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setCliFile(file);
-    setCliResult(null);
-    
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = parseCSV(ev.target.result);
-        setCliPreview(parsed.slice(0, 5)); // Primeras 5 filas
-      } catch (err) {
-        toast('Error leyendo CSV: ' + err.message);
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleEjFile = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setEjFile(file);
-    setEjResult(null);
-    
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = parseCSV(ev.target.result);
-        setEjPreview(parsed.slice(0, 5));
-      } catch (err) {
-        toast('Error leyendo CSV: ' + err.message);
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const uploadClientes = async () => {
-    if (!cliFile) return toast('Seleccione un archivo CSV');
-    setCliUploading(true);
-    setCliResult(null);
-    
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      try {
-        const result = await uploadClientesCSV(ev.target.result, (prog) => {
-          toast(`Procesando: ${prog.current} (${prog.created + prog.updated}/${prog.total})`);
-        });
-        setCliResult(result);
-        if (result.success) {
-          toast(`✅ ${result.created} creados, ${result.updated} actualizados`);
-        } else {
-          toast(`❌ Errores: ${result.errors.slice(0,3).join('; ')}`);
-        }
-      } catch (err) {
-        toast('Error subiendo: ' + err.message);
-        setCliResult({ success: false, errors: [err.message] });
-      } finally {
-        setCliUploading(false);
-      }
-    };
-    reader.readAsText(cliFile);
-  };
-
-  const uploadEjecutivos = async () => {
-    if (!ejFile) return toast('Seleccione un archivo CSV');
-    setEjUploading(true);
-    setEjResult(null);
-    
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      try {
-        const result = await uploadEjecutivosCSV(ev.target.result, (prog) => {
-          toast(`Procesando: ${prog.current} (${prog.created + prog.updated}/${prog.total})`);
-        });
-        setEjResult(result);
-        if (result.success) {
-          toast(`✅ ${result.created} creados, ${result.updated} actualizados`);
-        } else {
-          toast(`❌ Errores: ${result.errors.slice(0,3).join('; ')}`);
-        }
-      } catch (err) {
-        toast('Error subiendo: ' + err.message);
-        setEjResult({ success: false, errors: [err.message] });
-      } finally {
-        setEjUploading(false);
-      }
-    };
-    reader.readAsText(ejFile);
-  };
-
-  const runCleanup = async () => {
-    if (!cleanupConfirm) return;
-    setCleanupLoading(true);
-    try {
-      await onlyCleanup();
-      toast('✅ Limpieza completa - Todo borrado');
-      setTimeout(() => window.location.reload(), 1500);
-    } catch (err) {
-      toast('Error: ' + err.message);
-    } finally {
-      setCleanupLoading(false);
-    }
-  };
-
-  const runCleanupAndSeed = async () => {
-    if (!cleanupConfirm) return;
-    setSeedLoading(true);
-    try {
-      await cleanupAndSeed();
-      toast('✅ Limpieza + Seed completados - Recargando...');
-      setTimeout(() => window.location.reload(), 1500);
-    } catch (err) {
-      toast('Error: ' + err.message);
-    } finally {
-      setSeedLoading(false);
-    }
-  };
-
-  if (!isSuper) {
-    return (
-      <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
-        <div style={{ fontSize: 18, fontWeight: 700, color: '#12212D' }}>Solo Super Admin</div>
-        <div style={{ color: 'var(--grt)', marginTop: 8 }}>Esta sección requiere rol super_admin</div>
-      </div>
-    );
+  if (user?.role !== 'super_admin') {
+    return <EmptyState icon="🔒" title="Solo para super administradores">Esta sección permite cargar y respaldar datos de toda la empresa.</EmptyState>;
   }
 
-  const stats = {
-    ejecutivos: getEjs().length,
-    clientes: getClis().length
+  const respaldar = () => {
+    const blob = new Blob([JSON.stringify(DB, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `respaldo-proservis-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    URL.revokeObjectURL(url);
+    toast('Respaldo descargado. Guárdalo en un lugar seguro: contiene datos de clientes y personas.');
+  };
+
+  const sincronizar = async () => {
+    setSincronizando(true);
+    try { await saveDBAsync(); setUltima(new Date().toISOString()); toast('Todo está sincronizado con la base de datos.'); }
+    catch (e) { toast('No se pudo sincronizar: ' + (e.message || 'revisa la conexión y tus permisos.'), 'error'); }
+    finally { setSincronizando(false); }
   };
 
   return (
     <div>
-      <div className="ph">
-        Administración de Datos
-        <span style={{ fontSize: 11, color: 'var(--grt)', fontWeight: 600, marginLeft: 8 }}>
-          Super Admin · Zona peligrosa
-        </span>
-      </div>
-      <div className="ps">
-        <strong>⚠️ ZONA PELIGROSA:</strong> Estas acciones son irreversibles. Úselas con extrema precaución.
-        Actual: <strong>{stats.ejecutivos}</strong> ejecutivos · <strong>{stats.clientes}</strong> clientes
+      <PageHeader
+        title="Datos y cargas"
+        subtitle="Carga clientes y personas desde Excel/CSV, descarga un respaldo y revisa el estado de los datos."
+      />
+
+      <div className="kgrid" style={{ marginBottom: 14 }}>
+        <div className="kpi"><div className="kl">Clientes</div><div className="kv">{fmtNum(DB.clis.length)}</div></div>
+        <div className="kpi am"><div className="kl">Personas</div><div className="kv">{fmtNum(DB.ejs.length)}</div></div>
+        <div className="kpi"><div className="kl">Informes guardados</div><div className="kv">{fmtNum(DB.infs.length)}</div></div>
+        <div className="kpi am"><div className="kl">Aportes de áreas</div><div className="kv">{fmtNum(DB.contribuciones.length)}</div></div>
       </div>
 
-      {/* 1. LIMPIEZA TOTAL */}
-      <div className="card" style={{ borderTop: '3px solid #C0392B', background: '#FDF0EE' }}>
-        <div className="ct">🧹 Limpieza Total (BORRA TODO)</div>
-        <div style={{ fontSize: 12, color: '#C0392B', marginBottom: 12, fontWeight: 600 }}>
-          ⚠️ ELIMINA: Todos los clientes, ejecutivos, informes, áreas, workspaces, contribuciones, configs
-        </div>
-        
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, cursor: 'pointer' }}>
-          <input type="checkbox" checked={cleanupConfirm} onChange={e => setCleanupConfirm(e.target.checked)} style={{ width: 18, height: 18, accentColor: '#C0392B' }} />
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Confirmo que quiero BORRAR TODOS LOS DATOS</span>
-        </label>
-        
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button 
-            className="btn bro" 
-            onClick={runCleanup} 
-            disabled={!cleanupConfirm || cleanupLoading}
-            style={{ background: cleanupLoading ? '#ccc' : '' }}
-          >
-            {cleanupLoading ? '🧹 Borrando...' : '🧹 SOLO BORRAR TODO'}
-          </button>
-          
-          <button 
-            className="btn" 
-            onClick={runCleanupAndSeed} 
-            disabled={!cleanupConfirm || seedLoading}
-            style={{ background: seedLoading ? '#ccc' : 'linear-gradient(135deg,#C0392B,#E74C3C)', border: 'none', color: '#fff' }}
-          >
-            {seedLoading ? '🌱 Limpiando + Seed...' : '🌱 BORRAR TODO + CREAR SUPER ADMIN'}
-          </button>
-        </div>
-        
-        <div style={{ marginTop: 12, fontSize: 11, color: '#8B1A1A', background: '#FFF5F5', padding: 10, borderRadius: 8, border: '1px solid #F5C6CB' }}>
-          <strong>Seed Super Admin crea:</strong><br/>
-          • Usuario: <code>auxiliar.ti@proservis.com.co</code> / <code>Proservis2026</code><br/>
-          • Rol: <strong>super_admin</strong> · Nombre: <strong>Camilo Garcia</strong><br/>
-          • Workspace: <code>w1</code> (Proservis Temporales)<br/>
-          • Áreas: <code>a1</code> Selección, <code>a2</code> SST, <code>a3</code> Administración<br/>
-          • Módulos: <strong>Todos 14 activados</strong>
-        </div>
-      </div>
+      <ImportCard
+        titulo="Cargar clientes" icono="🏢" objeto="cliente"
+        intro="Si el NIT ya existe, el cliente se actualiza con los datos del archivo (sin borrar lo que el archivo deje vacío); si no, se crea. Las áreas de cada cliente se asignan después en «Clientes»."
+        columnas={COLUMNAS_CLIENTES} plantilla={descargarPlantillaClientes}
+        planear={planClientes} aplicar={aplicarClientes}
+      />
+      <ImportCard
+        titulo="Cargar personas" icono="👥" objeto="persona"
+        intro="Si el correo ya existe, la persona se actualiza; si no, se crea. No se cargan contraseñas: cada persona entra con ese correo usando Google o su cuenta de Firebase."
+        columnas={COLUMNAS_PERSONAS} plantilla={descargarPlantillaPersonas}
+        planear={(t) => planPersonas(t, user)} aplicar={(p) => aplicarPersonas(p, user)}
+      />
 
-      {/* 2. CARGA MASIVA CLIENTES */}
-      <div className="card" style={{ borderTop: '3px solid #168A43', marginTop: 14 }}>
-        <div className="ct">📥 Carga Masiva de Clientes</div>
-        <div style={{ fontSize: 12, color: 'var(--grt)', marginBottom: 12 }}>
-          Sube un CSV con columnas: NIT, Nombre, Marca, Ciudad, Sector, ejId, driveFolder, selId, sstId, logo
+      <section className="card">
+        <h2 className="imp-t"><span aria-hidden="true">💾</span> Respaldo y sincronización</h2>
+        <p className="text-muted">Los datos viven en Firestore. El respaldo descarga una copia completa en JSON; sincronizar fuerza el envío de cualquier cambio pendiente de este equipo.</p>
+        <div className="row-acts">
+          <button type="button" className="btn bvd" onClick={respaldar}>Descargar respaldo</button>
+          <button type="button" className="btn bgh" onClick={sincronizar} disabled={sincronizando}>{sincronizando ? 'Sincronizando…' : 'Sincronizar ahora'}</button>
         </div>
-        
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          <button className="btn bam bsm" onClick={downloadClienteTemplate}>
-            📄 Descargar plantilla CSV
-          </button>
-          <button className="btn bgh bsm" onClick={() => {
-            const info = getClienteTemplateInfo();
-            const cols = info.headers.map(h => `${h.key} (${h.required ? '*' : 'opcional'}): ${h.desc}`).join('\n');
-            alert('COLUMNAS REQUERIDAS:\n\n' + cols);
-          }}>
-            ℹ️ Ver columnas
-          </button>
-        </div>
-        
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-          <input 
-            type="file" 
-            accept=".csv,.txt" 
-            onChange={handleCliFile} 
-            style={{ flex: 1, minWidth: 200 }}
-            disabled={cliUploading}
-          />
-          {cliFile && (
-            <span style={{ fontSize: 12, color: '#168A43' }}>
-              ✅ {cliFile.name} ({Math.round(cliFile.size/1024)} KB)
-            </span>
-          )}
-        </div>
-        
-        {cliPreview && (
-          <div style={{ marginBottom: 12, fontSize: 11 }}>
-            <strong>Vista previa (primeras 5 filas):</strong>
-            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 6, fontSize: 10 }}>
-              <thead>
-                <tr style={{ background: 'var(--gr)', textAlign: 'left' }}>
-                  {Object.keys(cliPreview[0]).map(k => <th key={k} style={{ padding: '4px 8px', border: '1px solid var(--grb)' }}>{k}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {cliPreview.map((row, i) => (
-                  <tr key={i}>
-                    {Object.values(row).map((v, j) => <td key={j} style={{ padding: '4px 8px', border: '1px solid var(--grb)' }}>{v}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        
-        <button 
-          className="btn bvd" 
-          onClick={uploadClientes} 
-          disabled={!cliFile || cliUploading}
-          style={{ width: '100%', maxWidth: 300 }}
-        >
-          {cliUploading ? '⏳ Subiendo clientes...' : '📤 Subir Clientes a Firestore'}
-        </button>
-        
-        {cliResult && (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, 
-            background: cliResult.success ? 'var(--vc)' : '#FFF5F5',
-            border: cliResult.success ? '1px solid #C8E6D4' : '1px solid #F5C6CB'
-          }}>
-            <div style={{ fontWeight: 700, color: cliResult.success ? '#0F6B33' : '#C0392B' }}>
-              {cliResult.success ? '✅ ÉXITO' : '❌ ERRORES'}
-            </div>
-            <div style={{ fontSize: 11, marginTop: 4 }}>
-              Procesados: {cliResult.processed}/{cliResult.total} · 
-              Creados: {cliResult.created} · Actualizados: {cliResult.updated}
-            </div>
-            {cliResult.errors.length > 0 && (
-              <details style={{ marginTop: 8 }}>
-                <summary style={{ cursor: 'pointer', fontSize: 11, color: '#C0392B' }}>
-                  Ver {cliResult.errors.length} error(es)
-                </summary>
-                <div style={{ marginTop: 8, fontSize: 10, color: '#C0392B', maxHeight: 200, overflow: 'auto' }}>
-                  {cliResult.errors.slice(0, 20).map((e, i) => <div key={i} style={{ marginBottom: 2 }}>{e}</div>)}
-                  {cliResult.errors.length > 20 && <div>... y {cliResult.errors.length - 20} más</div>}
-                </div>
-              </details>
-            )}
-            {cliResult.warnings.length > 0 && (
-              <details style={{ marginTop: 8 }}>
-                <summary style={{ cursor: 'pointer', fontSize: 11, color: '#E8BB26' }}>
-                  Ver {cliResult.warnings.length} advertencia(s)
-                </summary>
-                <div style={{ marginTop: 8, fontSize: 10, color: '#7A6010' }}>
-                  {cliResult.warnings.map((w, i) => <div key={i}>{w}</div>)}
-                </div>
-              </details>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 3. CARGA MASIVA EJECUTIVOS */}
-      <div className="card" style={{ borderTop: '3px solid #E8BB26', marginTop: 14 }}>
-        <div className="ct">👥 Carga Masiva de Ejecutivos</div>
-        <div style={{ fontSize: 12, color: 'var(--grt)', marginBottom: 12 }}>
-          Sube un CSV con columnas: Nombre, Email, Rol, Password, WorkspaceId, AreaId, Activo
-        </div>
-        
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          <button className="btn bam bsm" onClick={downloadEjecutivoTemplate}>
-            📄 Descargar plantilla CSV
-          </button>
-          <button className="btn bgh bsm" onClick={() => {
-            const info = getEjecutivoTemplateInfo();
-            const cols = info.headers.map(h => `${h.key} (${h.required ? '*' : 'opcional'}): ${h.desc}`).join('\n');
-            alert('COLUMNAS REQUERIDAS:\n\n' + cols);
-          }}>
-            ℹ️ Ver columnas
-          </button>
-        </div>
-        
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-          <input 
-            type="file" 
-            accept=".csv,.txt" 
-            onChange={handleEjFile} 
-            style={{ flex: 1, minWidth: 200 }}
-            disabled={ejUploading}
-          />
-          {ejFile && (
-            <span style={{ fontSize: 12, color: '#E8BB26' }}>
-              ✅ {ejFile.name} ({Math.round(ejFile.size/1024)} KB)
-            </span>
-          )}
-        </div>
-        
-        {ejPreview && (
-          <div style={{ marginBottom: 12, fontSize: 11 }}>
-            <strong>Vista previa (primeras 5 filas):</strong>
-            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 6, fontSize: 10 }}>
-              <thead>
-                <tr style={{ background: 'var(--gr)', textAlign: 'left' }}>
-                  {Object.keys(ejPreview[0]).map(k => <th key={k} style={{ padding: '4px 8px', border: '1px solid var(--grb)' }}>{k}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {ejPreview.map((row, i) => (
-                  <tr key={i}>
-                    {Object.values(row).map((v, j) => <td key={j} style={{ padding: '4px 8px', border: '1px solid var(--grb)' }}>{v}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        
-        <button 
-          className="btn" 
-          onClick={uploadEjecutivos} 
-          disabled={!ejFile || ejUploading}
-          style={{ background: 'linear-gradient(135deg,#E8BB26,#F5D76E)', color: '#12212D', width: '100%', maxWidth: 300 }}
-        >
-          {ejUploading ? '⏳ Subiendo ejecutivos...' : '📤 Subir Ejecutivos a Firestore'}
-        </button>
-        
-        {ejResult && (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 8,
-            background: ejResult.success ? 'var(--vc)' : '#FFF5F5',
-            border: ejResult.success ? '1px solid #C8E6D4' : '1px solid #F5C6CB'
-          }}>
-            <div style={{ fontWeight: 700, color: ejResult.success ? '#0F6B33' : '#C0392B' }}>
-              {ejResult.success ? '✅ ÉXITO' : '❌ ERRORES'}
-            </div>
-            <div style={{ fontSize: 11, marginTop: 4 }}>
-              Procesados: {ejResult.processed}/{ejResult.total} · 
-              Creados: {ejResult.created} · Actualizados: {ejResult.updated}
-            </div>
-            {ejResult.errors.length > 0 && (
-              <details style={{ marginTop: 8 }}>
-                <summary style={{ cursor: 'pointer', fontSize: 11, color: '#C0392B' }}>
-                  Ver {ejResult.errors.length} error(es)
-                </summary>
-                <div style={{ marginTop: 8, fontSize: 10, color: '#C0392B', maxHeight: 200, overflow: 'auto' }}>
-                  {ejResult.errors.slice(0, 20).map((e, i) => <div key={i} style={{ marginBottom: 2 }}>{e}</div>)}
-                  {ejResult.errors.length > 20 && <div>... y {ejResult.errors.length - 20} más</div>}
-                </div>
-              </details>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 4. SINCRONIZAR LOCALSTORAGE */}
-      <div className="card" style={{ marginTop: 14, background: '#FFFEF5', border: '1px solid #FFE082' }}>
-        <div className="ct">🔄 Sincronizar LocalStorage → Firestore</div>
-        <div style={{ fontSize: 12, color: '#7A6010', marginBottom: 12 }}>
-          Fuerza la subida de todo lo que hay en localStorage a Firestore (útil si hay datos offline)
-        </div>
-        <button className="btn bam" onClick={() => { saveDB(); toast('Sincronización forzada iniciada'); }}>
-          🔄 Forzar Sync Ahora
-        </button>
-      </div>
+        {ultima && <div className="text-muted" style={{ marginTop: 8 }}>Última sincronización manual: {fmtFechaHora(ultima)}</div>}
+      </section>
     </div>
   );
 }

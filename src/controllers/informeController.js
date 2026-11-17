@@ -10,9 +10,55 @@
  * Behaviour mirrors exactly what was previously inlined in the view.
  */
 import { getCli } from '../models/Cliente';
-import { saveInf } from '../models/Informe';
+import { saveInf, getInfsForCli } from '../models/Informe';
 import { buildInformeHTML } from '../services/htmlReport.service';
 import { MESES_CORTOS } from '../utils/format';
+
+/** Datos "planos" del informe a partir del estado del formulario (o de un informe guardado, que tiene la misma forma). */
+/** Accidentes de la sede «Nacional» (si se reportó por sede y no se escribió el total general). */
+const atNacional = (sst) => Number((sst?.sedes || []).find(x => String(x.sede || '').trim().toLowerCase() === 'nacional')?.at) || 0;
+
+export function datosDeEstado(state) {
+  const { cliId, periodo, ejecutivo, headcount, sst, nomina, obs, logo, ausentismo, capacitacion, clima, facturacion } = state;
+  const cli = getCli(cliId);
+  const hcCierre = (headcount?.inicio || 0) + (headcount?.ingresos || 0) - (headcount?.retiros || 0);
+  return {
+    cliId, per: periodo, ejNom: ejecutivo?.nom || '',
+    cliNom: cli?.nom || '', cliMarca: cli?.marca || '',
+    logoCli: cli?.logo || logo,
+    hcInicio: headcount?.inicio || 0, hcIng: headcount?.ingresos || 0, hcRet: headcount?.retiros || 0, hcCierre,
+    at: sst?.indicadores?.at || atNacional(sst), oc: sst?.indicadores?.oc || 0,
+    mat: sst?.indicadores?.maternidad || 0, eg: sst?.indicadores?.eg || 0,
+    arl: sst?.indicadores?.arl || 0, ind: sst?.indicadores?.inducciones || 0,
+    sstObs: obs, sstCasos: sst?.casos || [],
+    sstSedes: sst?.sedes || [], sstSev: sst?.severidad || {}, sstInv: sst?.investigacion || {},
+    nliq: nomina?.liquidados || 0, ninc: nomina?.incapacidades || 0,
+    nlic: nomina?.licencias || 0, nhed: nomina?.heDiurnas || 0,
+    nhen: nomina?.heNocturnas || 0, nerr: nomina?.errores || 0,
+    nobs: nomina?.observaciones || '', rotObs: obs,
+    ausentismo, capacitacion, clima, facturacion,
+  };
+}
+
+/**
+ * El informe más reciente ANTERIOR al período dado para el mismo cliente, ya listo para
+ * calcular sus métricas (así el nuevo informe puede mostrar "frente al mes anterior").
+ * Si hay varios del mismo mes se toma el último guardado. Devuelve null si no hay ninguno.
+ */
+export function informePrevio(cliId, periodo) {
+  if (!cliId || !periodo) return null;
+  const antes = getInfsForCli(cliId)
+    .filter(i => i.per && i.per < periodo)
+    .sort((a, b) => (a.per === b.per ? String(b.ts || '').localeCompare(String(a.ts || '')) : (a.per < b.per ? 1 : -1)));
+  const p = antes[0];
+  if (!p) return null;
+  return {
+    d: datosDeEstado({ ...p, cliId, periodo: p.per, ejecutivo: { nom: p.ejNom }, obs: '' }),
+    rqs: p.seleccion || [], motivos: p.rotacion || [], casos: p.sst?.casos || [],
+    extras: { ausentismo: p.ausentismo, capacitacion: p.capacitacion, clima: p.clima, facturacion: p.facturacion },
+    activeModules: p.activeModules || null,
+  };
+}
 
 /**
  * Assembles the full Informe HTML from the wizard's current form state.
@@ -20,28 +66,11 @@ import { MESES_CORTOS } from '../utils/format';
  * @returns {string} the rendered, self-contained HTML report.
  */
 export function buildInformePreviewHtml(state) {
-  const { cliId, periodo, ejecutivo, headcount, sst, nomina, obs, seleccion, rotacion, fotos, logo, ausentismo, capacitacion, clima, facturacion, activeModules } = state;
-  const cli = getCli(cliId);
-  const hcCierre = (headcount?.inicio || 0) + (headcount?.ingresos || 0) - (headcount?.retiros || 0);
-
+  const { cliId, periodo, seleccion, rotacion, sst, fotos, ausentismo, capacitacion, clima, facturacion, activeModules, compacto } = state;
   return buildInformeHTML(
-    {
-      cliId, per: periodo, ejNom: ejecutivo?.nom || '',
-      cliNom: cli?.nom || '', cliMarca: cli?.marca || '',
-      logoCli: cli?.logo || logo,
-      hcInicio: headcount?.inicio || 0, hcIng: headcount?.ingresos || 0, hcRet: headcount?.retiros || 0, hcCierre,
-      at: sst?.indicadores?.at || 0, oc: sst?.indicadores?.oc || 0,
-      mat: sst?.indicadores?.maternidad || 0, eg: sst?.indicadores?.eg || 0,
-      arl: sst?.indicadores?.arl || 0, ind: sst?.indicadores?.inducciones || 0,
-      sstObs: obs, sstCasos: sst?.casos || [],
-      nliq: nomina?.liquidados || 0, ninc: nomina?.incapacidades || 0,
-      nlic: nomina?.licencias || 0, nhed: nomina?.heDiurnas || 0,
-      nhen: nomina?.heNocturnas || 0, nerr: nomina?.errores || 0,
-      nobs: nomina?.observaciones || '', rotObs: obs,
-      ausentismo, capacitacion, clima, facturacion,
-    },
+    datosDeEstado(state),
     seleccion, rotacion, sst?.casos || [], fotos,
-    { ausentismo, capacitacion, clima, facturacion, activeModules }
+    { ausentismo, capacitacion, clima, facturacion, activeModules, compacto, previo: informePrevio(cliId, periodo) }
   );
 }
 

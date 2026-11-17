@@ -32,9 +32,9 @@ export default function RecentRatings({ ratings, limit = 5, teamView = false }) 
             <div style={{ fontSize: 12, fontWeight: 700 }}>
               {inf.cliNom}{teamView && inf.ejNom ? ' · ' + inf.ejNom : ''} <span style={{ fontWeight: 500, color: 'var(--grt)' }}>({fmtPerLong(inf.per)})</span>
             </div>
-            {inf.feedback && <div style={{ fontSize: 11, color: 'var(--grt)', fontStyle: 'italic', marginTop: 2 }}>&ldquo;{inf.feedback}&rdquo;</div>}
+            {inf.feedback && <div style={{ fontSize: 12, color: 'var(--grt)', fontStyle: 'italic', marginTop: 2 }}>&ldquo;{inf.feedback}&rdquo;</div>}
           </div>
-          {inf.rating <= 3 && <span className="b bbd" style={{ fontSize: 9, flexShrink: 0 }}>Necesita atención</span>}
+          {inf.rating <= 3 && <span className="b bbd" style={{ fontSize: 11, flexShrink: 0 }}>Necesita atención</span>}
         </div>
       ))}
     </div>

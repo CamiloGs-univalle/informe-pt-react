@@ -44,6 +44,56 @@ function findCol(keys, patterns) {
 }
 
 function val(row, key) { return row[key] ?? ''; }
+/** Número seguro: acepta «#REF!», «#DIV/0!», vacíos y texto → 0. */
+const numSeguro = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const norm = (s) => stripAccents(String(s ?? '')).replace(/\s+/g, ' ').trim();
+const capitalizar = (t) => t.replace(/\b\p{L}/gu, c => c.toUpperCase());
+/** Busca una columna cuyo nombre sea exactamente uno de los dados (para no confundir «AT» con «Maternidad»). */
+const colExacta = (keys, nombres) => keys.find(k => nombres.includes(norm(k))) || null;
+
+/**
+ * Del ISSA (hoja DB_Indicadores) saca, para el mes pedido, lo de cada módulo de SST: accidentes y personas
+ * expuestas por sede, días perdidos por accidentes e investigación de accidentes. Las filas se buscan por su
+ * nombre (no por su posición), así sirve aunque el formato corra una fila.
+ */
+function sstModulosDeISSA(db2D, mesIdx) {
+  const cel = (i) => numSeguro(db2D?.[i]?.[mesIdx]);
+  const sedeDe = (t) => { const m = t.match(/sede\s+(.+)$/); return m ? capitalizar(m[1].trim()) : 'Nacional'; };
+  const sedes = []; const dias = {}; let inv = null;
+  (db2D || []).forEach((row, i) => {
+    const t = norm(row?.[2]);
+    if (!t) return;
+    if (t.startsWith('tasa de accidentabilidad')) {
+      const at = cel(i); const expuestos = cel(i + 1);
+      if (at || expuestos) sedes.push({ sede: sedeDe(t), at, expuestos });
+    } else if (t.startsWith('severidad de accidentabilidad')) {
+      dias[sedeDe(t)] = cel(i);
+    } else if (t.startsWith('cumplimiento de investigacion')) {
+      inv = { investigados: cel(i), total: cel(i + 1) };
+    }
+  });
+  sedes.sort((a, b) => (a.sede === 'Nacional' ? -1 : b.sede === 'Nacional' ? 1 : a.sede.localeCompare(b.sede)));
+  const diasAT = dias.Nacional != null ? dias.Nacional : Object.values(dias).reduce((a, b) => a + b, 0);
+  return {
+    sedes,
+    severidad: { diasAT, conDias: 0 },
+    investigacion: inv ? { total: inv.total, investigados: inv.investigados, aTiempo: 0 } : { total: 0, investigados: 0, aTiempo: 0 },
+  };
+}
+
+/**
+ * Junta lo leído de un archivo con lo que la persona ya había escrito: el archivo manda en lo que trae,
+ * y lo escrito a mano de los otros módulos de SST (severidad, investigación, sedes) no se pierde.
+ */
+export function fusionarSST(antes = {}, nuevo = {}) {
+  const trae = (o) => !!o && Object.values(o).some(v => Number(v) > 0);
+  return {
+    ...antes, ...nuevo,
+    sedes: (nuevo.sedes && nuevo.sedes.length ? nuevo.sedes : antes.sedes) || [],
+    severidad: trae(nuevo.severidad) ? { ...(antes.severidad || {}), ...nuevo.severidad } : (antes.severidad || {}),
+    investigacion: trae(nuevo.investigacion) ? { ...(antes.investigacion || {}), ...nuevo.investigacion } : (antes.investigacion || {}),
+  };
+}
 function num(row, key) { return Number(row[key]) || 0; }
 
 /** Parses a single Excel/CSV `File` into `{ fileName, sheets }`, sheets keyed by detected section. */
@@ -160,11 +210,11 @@ export function extractRotacion(rows) {
 
 export function extractSST(rows, opts = {}) {
   // Si es ISSA (db_issa como 2D array), parsear por mes
-  if (Array.isArray(rows) && rows.length && Array.isArray(rows[0]) && opts.db_issa) {
+  if (opts.db_issa) {
     return extractSSTFromISSA(opts.db_issa, opts.at_issa, opts.periodo);
   }
   // También si rows viene de ISSA pero sin opts, intentar detectar
-  if (!rows.length) return { indicadores: {}, casos: [] };
+  if (!rows.length) return { indicadores: {}, casos: [], sedes: [], severidad: {}, investigacion: {} };
   // Detecta si rows parece ser de ISSA (tiene estructura de DB_Indicadores con columnas Ene-Dic)
   const firstRowKeys = rows[0] ? Object.keys(rows[0]) : [];
   const maybeISSA = firstRowKeys.some(k=> ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'].some(m=> k.toLowerCase().includes(m)));
@@ -186,6 +236,27 @@ export function extractSST(rows, opts = {}) {
     severidad: find(['severidad', 'sever']),
     ausentismoTasa: find(['ausent', 'tasa aus']),
   };
+  // Módulos de SST con columnas propias (todas opcionales): sedes, severidad e investigación
+  const diasK = findCol(keys, ['dias perd', 'dias de incapacidad', 'dias incapacidad']);
+  const conDiasK = findCol(keys, ['con incapacidad', 'con dias']);
+  const totK = findCol(keys, ['por investigar', 'a investigar', 'ocurrid']);
+  const hechosK = findCol(keys, ['investigados', 'investigado']);
+  const tiempoK = findCol(keys, ['a tiempo', 'plazo']);
+  const severidad = { diasAT: diasK ? num(r, diasK) : 0, conDias: conDiasK ? num(r, conDiasK) : 0 };
+  const investigacion = { total: totK ? num(r, totK) : 0, investigados: hechosK ? num(r, hechosK) : 0, aTiempo: tiempoK ? num(r, tiempoK) : 0 };
+  // Sedes: filas con una columna «Sede» (hoja «SST Sedes»); si solo trae «Expuestos», se toma como Nacional.
+  let sedes = [];
+  rows.forEach(row => {
+    const ks = Object.keys(row);
+    const sk = colExacta(ks, ['sede', 'sede / regional']);
+    const nombre = sk ? String(val(row, sk)).trim() : '';
+    if (!nombre) return;
+    const atK = colExacta(ks, ['at', 'accidentes', 'accidentes de trabajo', 'accidentes (at)']);
+    const exK = findCol(ks, ['expuest', 'trabajadores', 'personas']);
+    const at = atK ? num(row, atK) : 0; const expuestos = exK ? num(row, exK) : 0;
+    if (at || expuestos) sedes.push({ sede: nombre, at, expuestos });
+  });
+  if (!sedes.length && indicadores.expuestos > 0) sedes = [{ sede: 'Nacional', at: indicadores.at, expuestos: indicadores.expuestos }];
   // Helper ISSA: extrae del DB_Indicadores 2D para el mes del periodo
   function extractSSTFromISSA(db2D, at2D, periodo) {
     try {
@@ -213,7 +284,7 @@ export function extractSST(rows, opts = {}) {
         at: atNal,
         oc: 0,
         maternidad: 0,
-        eg: sevNal ? Math.round(sevNal) : 0,
+        eg: 0, // los días por enfermedad general no vienen en esta hoja (el valor que se leía aquí era el resultado de severidad)
         arl: 100,
         inducciones: 0,
         expuestos: trabNal,
@@ -253,8 +324,11 @@ export function extractSST(rows, opts = {}) {
           }
         }
       }
-      return { indicadores, casos };
-    } catch (e) { return { indicadores:{at:0, oc:0, maternidad:0, eg:0, arl:100, inducciones:0, expuestos:0, tasaAccidentalidad:0, severidad:0}, casos:[] }; }
+      const modulos = sstModulosDeISSA(db2D, mesIdx);
+      const nac = modulos.sedes.find(x => x.sede === 'Nacional');
+      if (nac) { indicadores.at = nac.at; indicadores.expuestos = nac.expuestos; indicadores.tasaAccidentalidad = nac.expuestos ? Number((nac.at / nac.expuestos * 100).toFixed(2)) : 0; }
+      return { indicadores, casos, ...modulos };
+    } catch (e) { return { indicadores:{at:0, oc:0, maternidad:0, eg:0, arl:100, inducciones:0, expuestos:0, tasaAccidentalidad:0, severidad:0}, casos:[], sedes:[], severidad:{}, investigacion:{} }; }
   }
   const casos = rows.slice(1).map(row => {
     const rowKeys = Object.keys(row);
@@ -270,7 +344,7 @@ export function extractSST(rows, opts = {}) {
       seguimiento: f(['seguimiento', 'obs', 'detalle']),
     };
   }).filter(c => c.nombre);
-  return { indicadores, casos };
+  return { indicadores, casos, sedes, severidad, investigacion };
 }
 
 export function extractNomina(rows) {

@@ -8,6 +8,7 @@
  * See docs/MODEL.md for the full entity/field reference.
  */
 import { DB, saveDB } from './db';
+import { nuevoId } from '../utils/ids';
 
 // ── Workspaces ───────────────────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ export function saveWorkspace(data) {
     const w = DB.workspaces.find(x => x.id === data.id);
     if (w) Object.assign(w, data);
   } else {
-    data.id = 'w' + Date.now();
+    data.id = nuevoId('w', DB.workspaces);
     DB.workspaces.push(data);
   }
   saveDB();
@@ -32,9 +33,18 @@ export function saveWorkspace(data) {
 }
 
 export function deleteWorkspace(id) {
+  const areaIds = DB.areas.filter(a => a.workspaceId === id).map(a => a.id);
   DB.workspaces = DB.workspaces.filter(w => w.id !== id);
   DB.areas = DB.areas.filter(a => a.workspaceId !== id);
+  areaIds.forEach(limpiarReferenciasDeArea);
   saveDB();
+}
+
+/** Quita de personas, clientes y contribuciones las referencias a un área borrada. */
+function limpiarReferenciasDeArea(areaId) {
+  DB.ejs.forEach(e => { if (e.areaId === areaId) e.areaId = ''; });
+  DB.clis.forEach(c => { if (c.asignaciones) delete c.asignaciones[areaId]; });
+  DB.contribuciones = DB.contribuciones.filter(ct => ct.areaId !== areaId);
 }
 
 // ── Areas ────────────────────────────────────────────────────────────────
@@ -53,7 +63,7 @@ export function saveArea(data) {
     const a = DB.areas.find(x => x.id === data.id);
     if (a) Object.assign(a, data);
   } else {
-    data.id = 'a' + Date.now();
+    data.id = nuevoId('a', DB.areas);
     DB.areas.push(data);
   }
   saveDB();
@@ -62,5 +72,6 @@ export function saveArea(data) {
 
 export function deleteArea(id) {
   DB.areas = DB.areas.filter(a => a.id !== id);
+  limpiarReferenciasDeArea(id);
   saveDB();
 }

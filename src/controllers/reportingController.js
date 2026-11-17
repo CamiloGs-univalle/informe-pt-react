@@ -1,35 +1,48 @@
 /**
  * controllers/reportingController.js
  * ─────────────────────────────────────────────────────────────────────────
- * Cross-entity reporting logic that doesn't belong to a single model
- * (it reads Ejecutivo + Cliente + Informe together). Kept as a controller
- * rather than bolted onto one model to avoid circular imports between
- * models and to make the "who calls whom" story explicit:
+ * Cálculos que cruzan varias entidades (personas + clientes + informes +
+ * aportes) y por eso no viven en un solo modelo.
  *
- *   View (Dashboard/EquipoAdmin) → Controller (this file) → Models
+ *   Vista (Dashboard / Mi equipo) → este controlador → modelos
  */
-import { getInfs } from '../models/Informe';
-import { getEjs, getUsersForAdmin } from '../models/Ejecutivo';
-import { getClisForEj } from '../models/Cliente';
+import { DB } from '../models/db';
+import { getUsersForAdmin } from '../models/Ejecutivo';
+import { ESTADOS } from '../models/Contribucion';
+import { tareasDe } from '../models/Alcance';
+import { periodoActual } from '../utils/format';
 
 /**
- * Computes each team member's monthly report progress for the current
- * calendar month: how many of their assigned clientes already have an
- * Informe for this period, and how many are still pending.
+ * Avance mensual de cada persona del equipo en el período `per` (YYYY-MM).
+ * Cada persona se mide por lo que realmente le toca:
+ *  - `lider`: informes del período sobre los clientes que lidera.
+ *  - `aporte`: aportes de su área (completados o validados) sobre los
+ *    clientes donde está asignada.
+ *  - `ambos`: lidera informes y además aporta: las dos cosas se suman.
+ *  - `ninguno`: aún no tiene clientes (no cuenta como "atrasada").
  *
- * @param {object} adminUser - the admin/super_admin viewing the report.
- * @returns {Array<{user: object, total: number, hechos: number, pend: number, pct: number}>}
+ * @returns {Array<{user, tipo, total, hechos, pend, pct}>}
  */
-export function getTeamMonthlyProgress(adminUser) {
-  const teamUsers = adminUser?.role === 'super_admin' ? getEjs() : getUsersForAdmin(adminUser?.id);
-  const hoy = new Date();
-  const per = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0');
-  const infsThisMonth = getInfs().filter(i => i.per === per);
-  return teamUsers.map(u => {
-    const misClis = getClisForEj(u.id);
-    const hechos = infsThisMonth.filter(i => misClis.find(c => c.id === i.cliId)).length;
-    const pend = Math.max(0, misClis.length - hechos);
-    const pct = misClis.length ? Math.round((hechos / misClis.length) * 100) : 0;
-    return { user: u, total: misClis.length, hechos, pend, pct };
+export function getTeamMonthlyProgress(adminUser, per = periodoActual()) {
+  const equipo = adminUser?.role === 'super_admin' ? DB.ejs : getUsersForAdmin(adminUser?.id);
+  const infsDelPeriodo = DB.infs.filter(i => i.per === per);
+  const aportesDelPeriodo = DB.contribuciones.filter(c => c.per === per);
+
+  return equipo.map(u => {
+    // Lo que le toca a la persona = informes que lidera + partes que entrega en su área (si hace las dos, se suman).
+    const clisLider = DB.clis.filter(c => c.ejId === u.id);
+    const hechosLider = clisLider.filter(c => infsDelPeriodo.some(i => i.cliId === c.id)).length;
+    // Mismas tareas que ve la persona en "Mis aportes" (tareasDe): cliente × área donde le toca aportar.
+    const tareas = u.role === 'super_admin' ? [] : tareasDe(u);
+    const hechosAporte = tareas.filter(t => aportesDelPeriodo.some(ct => ct.cliId === t.cli.id && ct.areaId === t.area.id
+      && (ct.estado === ESTADOS.COMPLETADO || ct.estado === ESTADOS.VALIDADO))).length;
+    if (clisLider.length && tareas.length) return resumen(u, 'ambos', clisLider.length + tareas.length, hechosLider + hechosAporte);
+    if (clisLider.length) return resumen(u, 'lider', clisLider.length, hechosLider);
+    if (tareas.length) return resumen(u, 'aporte', tareas.length, hechosAporte);
+    return resumen(u, 'ninguno', 0, 0);
   });
+}
+
+function resumen(user, tipo, total, hechos) {
+  return { user, tipo, total, hechos, pend: Math.max(0, total - hechos), pct: total ? Math.round((hechos / total) * 100) : 0 };
 }

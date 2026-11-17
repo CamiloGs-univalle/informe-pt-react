@@ -1,17 +1,14 @@
-/**
- * views/pages/nuevo-informe/ActiveModulosBanner.jsx
- * ─────────────────────────────────────────────────────────────────────────
- * Small banner reminding the user which report modules are active for this
- * cliente/usuario (configured in ConfigModulos), with a shortcut to go
- * change that configuration.
- */
+/** Recuerda qué módulos lleva este informe y da acceso directo a cambiarlos. */
+import { Link } from 'react-router-dom';
+import { MODULOS } from '../../../models/constants';
+
 export default function ActiveModulosBanner({ activeModulos }) {
   if (!activeModulos.length) return null;
   return (
-    <div style={{ background: '#FDF6D8', border: '1px solid #E8D78A', borderRadius: 10, padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-      <span style={{ fontSize: 11, fontWeight: 800, color: '#7A6010' }}>⚙️ Módulos activos ({activeModulos.length}):</span>
-      {activeModulos.map(m => <span key={m} className="b" style={{ background: '#fff', border: '1px solid #E8D78A', color: '#7A6010', fontSize: 10 }}>{m}</span>)}
-      <a href="#/config-modulos" style={{ marginLeft: 'auto', fontSize: 11, color: '#168A43', fontWeight: 700 }}>Configurar →</a>
+    <div className="mod-banner">
+      <span className="mod-banner-t">Este informe incluye {activeModulos.length} de {MODULOS.length} módulos:</span>
+      <span className="cli-chips">{activeModulos.map(id => <span key={id} className="chip am">{MODULOS.find(m => m.id === id)?.label || id}</span>)}</span>
+      <Link to="/config-modulos" className="link">Cambiar módulos</Link>
     </div>
   );
 }

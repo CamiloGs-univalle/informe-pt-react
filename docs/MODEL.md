@@ -34,7 +34,6 @@ erDiagram
         string email
         string zona
         string role "usuario | admin | super_admin"
-        string password
         string workspaceId FK
         string areaId FK
         bool activo
@@ -72,14 +71,13 @@ también cubre administradores y super-admins).
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `id` | string | `e<timestamp>` al crearse |
+| `id` | string | Único, generado con `utils/ids.js: nuevoId('e', …)` al crearse |
 | `nom` | string | Nombre completo |
-| `email` | string | Normalizado a minúsculas; usado como identificador de login |
+| `email` | string | Normalizado a minúsculas; es el vínculo con la cuenta de Firebase Authentication |
 | `zona` | string | Ciudad/región, informativo |
 | `role` | `'usuario' \| 'admin' \| 'super_admin'` | Ver tabla de roles abajo |
-| `password` | string | **Texto plano** — solo para el fallback de autenticación local (ver "Deuda técnica" en ARCHITECTURE.md) |
 | `workspaceId` / `areaId` | string (FK) | A qué Workspace/Area pertenece |
-| `activo` | bool | Un usuario inactivo no puede autenticarse localmente |
+| `activo` | bool | Una persona inactiva no puede entrar (la sesión se rechaza al cargar su perfil) |
 
 ### Cliente (`models/Cliente.js`)
 
@@ -129,27 +127,45 @@ posibilidad de sobreescribir por cliente. Se guarda dentro de `DB.moduloConfigs`
 - `<userId>` → configuración global del usuario.
 - `<userId>_<clienteId>` → override para ese cliente en particular.
 
-## Roles y permisos (RBAC)
+## Roles y permisos
 
-| Ruta | usuario | admin | super_admin |
-|---|:---:|:---:|:---:|
-| `/` (Dashboard) | ✅ | ✅ | ✅ |
-| `/clientes`, `/nuevo`, `/config-modulos` | ✅ | ✅ | ✅ |
-| `/guardados` | ✅ | ✅ | ✅ |
-| `/equipo`, `/aclientes`, `/aejecutivos` | ❌ | ✅ | ✅ |
-| `/espacios` | ❌ | ❌ | ✅ |
+Hay tres roles guardados (`usuario`, `admin`, `super_admin`) y dos **perfiles derivados** que no se
+guardan sino que se calculan en `models/Alcance.js`:
 
-Aplicado por `routes/RequireRole.jsx` según `docs/ARCHITECTURE.md` §2. El menú lateral
-(`views/layout/Layout.jsx`) filtra las opciones visibles con la misma lógica de roles.
+- **Ejecutivo líder** (`esLider`): arma y entrega el informe final de sus clientes. Es quien está
+  como líder de un cliente (`cliente.ejId`), o pertenece a un área marcada «lidera el informe
+  final» (`area.lidera`).
+- **Trabajador de área**: aporta su parte (Selección, SST…) de los clientes donde figura en
+  `cliente.asignaciones[areaId]`.
 
-## Persistencia (localStorage)
+`capacidades(user)` decide qué ve cada quien; el menú y las rutas (`routes/RequireCap.jsx`) usan las
+mismas claves.
 
-| Llave | Contenido |
+| Pantalla (ruta) | Trabajador | Líder | Admin | Super admin |
+|---|:---:|:---:|:---:|:---:|
+| Inicio `/` | ✅ | ✅ | ✅ | ✅ |
+| Mis aportes `/mis-contribuciones` | ✅ | ✅ (si tiene áreas) | ✅ | ✅ (elige el área) |
+| Tablero del equipo `/colaborativo` | ❌ | ✅ | ✅ | ✅ |
+| Mis clientes `/clientes` | ✅ (los suyos) | ✅ | ✅ | ✅ |
+| Nuevo informe `/nuevo`, Guardados `/guardados`, Módulos `/config-modulos` | ❌ | ✅ | ✅ | ✅ |
+| Mi equipo `/equipo`, Gestionar clientes `/aclientes`, Personas `/aejecutivos` | ❌ | ❌ | ✅ (su alcance) | ✅ |
+| Espacios y áreas `/espacios`, Datos y cargas `/admin-data` | ❌ | ❌ | ❌ | ✅ |
+
+El super admin además puede «Ver como» otra persona (suplantación solo de lectura de alcance; el
+rol real sigue siendo el suyo para los permisos de administración).
+
+## Persistencia
+
+**Firestore es la fuente de verdad** (colecciones `ejecutivos`, `clientes`, `informes`, `workspaces`,
+`areas`, `contribuciones`, `moduloConfigs`). Al iniciar sesión se carga todo desde el servidor
+(`loadDB({ force: true })`); cada `saveDB()` sincroniza solo las diferencias (crear/actualizar/borrar
+por id) con `services/firebaseSync.service.js`. La sincronización solo se habilita después de una
+carga exitosa del servidor, para que una caché vieja nunca pise datos reales.
+
+| Llave en el navegador | Contenido |
 |---|---|
-| `ps_v3` | El objeto `DB` completo (`ejs`, `clis`, `infs`, `workspaces`, `areas`, `moduloConfigs`) |
-| `ps_auth_user` | Usuario de la sesión actual |
-| `ps_ej_activo` | Id del ejecutivo activo (para la suplantación de super_admin) |
+| `ps_v3` | Copia local del `DB` (caché de lectura rápida/offline). Se borra al cerrar sesión. |
 | `gdrive_token`, `gdrive_token_time` | Token OAuth de Google Drive (expira a los 50 min) |
 
-Ninguno de estos datos sale del navegador de cada persona: no hay sincronización entre
-dispositivos ni entre usuarios salvo que compartan el mismo navegador/perfil.
+Los ids nuevos se generan con `utils/ids.js: nuevoId(prefijo, lista)` (único aunque se creen varios
+registros en el mismo milisegundo, como en las cargas masivas).

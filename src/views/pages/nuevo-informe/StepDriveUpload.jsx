@@ -13,7 +13,7 @@ export default function StepDriveUpload({ uploading, onDrop, onLocalUpload, onDr
     <div>
       <div className="card" style={{background:'#FBFDFB', border:'1px solid #168A43'}}>
         <div className="ct">📥 Plantillas — descarga la guía y sube sin errores</div>
-        <div style={{fontSize:11, color:'var(--grt)', marginBottom:8}}>Columnas exactas con ejemplo. Solo filtra por tu área y arrastra.</div>
+        <div style={{fontSize: 12, color:'var(--grt)', marginBottom:8}}>Columnas exactas con ejemplo. Solo filtra por tu área y arrastra.</div>
         <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
           <button className="btn bvd bsm" onClick={downloadPlantillaSeleccion}>⬇ Selección (ficha 4 ind.)</button>
           <button className="btn bsm" style={{background:'#1A5276', color:'#fff'}} onClick={downloadPlantillaSST}>⬇ SST + Casos</button>

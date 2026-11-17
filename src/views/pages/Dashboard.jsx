@@ -1,24 +1,28 @@
 /**
  * views/pages/Dashboard.jsx
  * ─────────────────────────────────────────────────────────────────────────
- * Panel principal, con vista distinta según el rol (super_admin ve todos
- * los espacios y equipos; admin ve su equipo; usuario ve sus propios
- * clientes y módulos). La composición vive aquí; cada visual reutilizable
- * está en `views/pages/dashboard/` (charts.jsx, TeamGrid, WorkspacesOverview,
- * RecentRatings, ModuleUsage, InsightBanner) para que este archivo se
- * quede en "qué mostrar según el rol", no en "cómo se dibuja cada gráfica".
+ * Pantalla de inicio. Muestra LO QUE LE TOCA a cada persona (no los datos de
+ * toda la empresa):
+ *  - Equipo de área  → sus aportes pendientes (ver `dashboard/WorkerHome.jsx`).
+ *  - Ejecutivo líder → sus clientes, aportes por validar e informes del período.
+ *  - Admin           → lo mismo, sobre su equipo.
+ *  - Super admin     → lo mismo sobre toda la organización + espacios.
+ * El alcance sale de `models/Alcance.js`.
  */
-import { useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getEjs, getEj } from '../../models/Ejecutivo';
-import { getClis, getClisForEj } from '../../models/Cliente';
-import { getInfs, getInfCountForCli } from '../../models/Informe';
+import { DB } from '../../models/db';
 import { getWorkspaces } from '../../models/Workspace';
 import { getModuloConfig } from '../../models/ModuloConfig';
+import { ESTADOS } from '../../models/Contribucion';
 import { ROLE_LABEL, MODULOS } from '../../models/constants';
+import { capacidades, clientesQueLidera, informesDe } from '../../models/Alcance';
 import { getTeamMonthlyProgress } from '../../controllers/reportingController';
-import { MESES_LARGOS } from '../../utils/format';
-import SortTimePanel from '../common/SortTimePanel';
+import { MESES_LARGOS, periodoActual, fmtNum, fmtDec, plural, fmtPerLong } from '../../utils/format';
+import PeriodPicker from '../common/PeriodPicker';
+import PageHeader from '../common/PageHeader';
+import EmptyState from '../common/EmptyState';
+import ClienteLogo from '../common/ClienteLogo';
 import { Gauge, Delta, TrendChart } from './dashboard/charts';
 import InsightBanner from './dashboard/InsightBanner';
 import { computeInsight } from './dashboard/insight';
@@ -26,264 +30,188 @@ import TeamGrid from './dashboard/TeamGrid';
 import WorkspacesOverview from './dashboard/WorkspacesOverview';
 import RecentRatings from './dashboard/RecentRatings';
 import { AdoptionChart, MyModulesGrid } from './dashboard/ModuleUsage';
+import { esperadoPct } from './dashboard/utils';
+import { moduloIncluido } from '../../models/ModuloConfig';
+import WorkerHome from './dashboard/WorkerHome';
 
 const RATING_WINDOW_DAYS = 45;
 
-/** Informes calificados, más recientes primero, con nombre de cliente/ejecutivo resueltos. */
-function buildRatedList(infs, clis, ejs) {
-  return infs
-    .filter(i => i.rating)
-    .map(i => ({
-      ...i,
-      cliNom: clis.find(c => c.id === i.cliId)?.nom || i.cliNom || '—',
-      ejNom: ejs.find(e => e.id === i.ejId)?.nom || i.ejNom || '',
-    }))
-    .sort((a, b) => (b.ratedAt || b.ts || '').localeCompare(a.ratedAt || a.ts || ''));
+function saludo() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Buenos días' : h < 18 ? 'Buenas tardes' : 'Buenas noches';
 }
 
-export default function Dashboard({ ejId, user }) {
-  const [mis, setMis] = useState([]);
-  const [kpis, setKpis] = useState({ cli: 0, mes: 0, pend: 0, tot: 0 });
-  const [team, setTeam] = useState([]);
-  const [ws, setWs] = useState([]);
-  const [months, setMonths] = useState([]);
-  const [ratedList, setRatedList] = useState([]);
-  const [scopeInfs, setScopeInfs] = useState([]);
-  const ejecutivo = getEj(ejId);
+/** Últimos 6 meses terminando en el período elegido, con el conteo de informes de cada uno. */
+function tendencia(infs, per) {
+  const [y, m] = per.split('-').map(Number);
+  const out = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(y, m - 1 - i, 1);
+    const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    out.push({
+      label: d.toLocaleDateString('es-CO', { month: 'short' }).replace('.', ''),
+      fullLabel: MESES_LARGOS[d.getMonth()] + ' ' + d.getFullYear(),
+      cnt: infs.filter(x => x.per === key).length,
+    });
+  }
+  return out;
+}
+
+export default function Dashboard({ user }) {
+  const [per, setPer] = useState(periodoActual());
+  const caps = capacidades(user);
   const role = user?.role || 'usuario';
-  const cfg = user ? getModuloConfig(user.id) : {};
+  const esEquipo = role === 'admin' || role === 'super_admin';
 
-  useEffect(() => {
-    const isSuper = role === 'super_admin';
-    const clis = isSuper ? getClis() : ejId ? getClisForEj(ejId) : getClis();
-    const infs = getInfs();
-    const allClis = getClis();
-    const allEjs = getEjs();
-    const hoy = new Date();
-    const mc = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0');
-    const im = infs.filter(i => i.per === mc && clis.find(c => c.id === i.cliId));
-    const pend = Math.max(0, clis.length - im.length);
-    setMis(clis);
-    setKpis({ cli: clis.length, mes: im.length, pend, tot: infs.length });
+  const datos = useMemo(() => {
+    if (!caps.esLider) return null;
+    const clis = clientesQueLidera(user);
+    const infs = informesDe(user);
+    const cliIds = new Set(clis.map(c => c.id));
+    const infsPer = infs.filter(i => i.per === per);
+    const conInforme = clis.filter(c => infsPer.some(i => i.cliId === c.id));
+    const pendientes = clis.filter(c => !infsPer.some(i => i.cliId === c.id));
+    const porValidar = DB.contribuciones.filter(ct => ct.per === per && ct.estado === ESTADOS.COMPLETADO && cliIds.has(ct.cliId)).length;
+    const validados = DB.contribuciones.filter(ct => ct.per === per && ct.estado === ESTADOS.VALIDADO && cliIds.has(ct.cliId)).length;
+    const team = esEquipo ? getTeamMonthlyProgress(user, per) : [];
+    const rated = infs.filter(i => i.rating)
+      .map(i => ({ ...i, cliNom: DB.clis.find(c => c.id === i.cliId)?.nom || i.cliNom || '—', ejNom: DB.ejs.find(e => e.id === i.ejId)?.nom || i.ejNom || '' }))
+      .sort((a, b) => (b.ratedAt || b.ts || '').localeCompare(a.ratedAt || a.ts || ''));
+    const cutoff = Date.now() - RATING_WINDOW_DAYS * 86400000;
+    const lowRated = rated.filter(i => i.rating <= 3 && new Date(i.ratedAt || i.ts).getTime() >= cutoff);
+    const months = tendencia(infs, per);
+    return { clis, infs, infsPer, conInforme, pendientes, porValidar, validados, team, rated, lowRated, months };
+  }, [user, per, esEquipo, caps.esLider]);
 
-    const teamRows = (isSuper || role === 'admin') ? getTeamMonthlyProgress(user) : [];
-    setTeam(teamRows);
-    setWs(getWorkspaces());
+  if (!datos) {
+    return (
+      <div>
+        <PageHeader title={`${saludo()}, ${user.nom.split(' ')[0]}`} badge={ROLE_LABEL[role]} subtitle={[user.zona, 'Equipo de área'].filter(Boolean).join(' · ')} />
+        <WorkerHome user={user} />
+      </div>
+    );
+  }
 
-    // Tendencia 6 meses, con etiqueta larga para el tooltip.
-    const mArr = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
-      const per = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-      const cnt = infs.filter(x => x.per === per).length;
-      mArr.push({ label: d.toLocaleDateString('es-CO', { month: 'short' }), fullLabel: MESES_LARGOS[d.getMonth()] + ' ' + d.getFullYear(), cnt });
-    }
-    setMonths(mArr);
+  const { clis, infs, conInforme, pendientes, porValidar, validados, team, rated, lowRated, months } = datos;
+  const pct = clis.length ? Math.round((conInforme.length / clis.length) * 100) : 0;
+  const avg = rated.length ? rated.reduce((s, i) => s + i.rating, 0) / rated.length : null;
+  const prevCnt = months.length >= 2 ? months[months.length - 2].cnt : null;
+  // Módulos que van en TODOS los clientes que lidera (el detalle por cliente está en Mis módulos).
+  const modulosActivos = MODULOS.filter(m => (clis.length ? clis.every(c => moduloIncluido(c, m.id)) : getModuloConfig(user.id)[m.id] !== false)).length;
+  const kpis = { cli: clis.length, pend: pendientes.length, porValidar };
+  const esperado = esperadoPct(per);
+  const insight = computeInsight({ kpis, team, lowRated, esEquipo, esperado });
 
-    // Alcance de informes para el resto del panel: super_admin ve todo,
-    // admin ve el de su equipo, usuario ve el de sus propios clientes.
-    let scoped = infs;
-    if (isSuper) scoped = infs;
-    else if (role === 'admin') {
-      const teamIds = new Set(teamRows.map(t => t.user.id));
-      scoped = infs.filter(i => teamIds.has(i.ejId));
-    } else {
-      scoped = infs.filter(i => clis.find(c => c.id === i.cliId));
-    }
-    setScopeInfs(scoped);
-    setRatedList(buildRatedList(scoped, allClis, allEjs));
-  }, [ejId, user, role]);
-
-  const greeting = () => {
-    const h = new Date().getHours();
-    if (h < 12) return 'Buenos días';
-    if (h < 18) return 'Buenas tardes';
-    return 'Buenas noches';
-  };
-
-  const pct = kpis.cli > 0 ? Math.round((kpis.mes / kpis.cli) * 100) : 0;
-  const rated = ratedList;
-  const avgRating = rated.length ? (rated.reduce((s, i) => s + i.rating, 0) / rated.length).toFixed(1) : '—';
-  const cutoff = Date.now() - RATING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  const lowRated = rated.filter(i => i.rating <= 3 && new Date(i.ratedAt || i.ts).getTime() >= cutoff);
-  const insight = computeInsight({ role, kpis, team, lowRated });
-  const prevMonthCnt = months.length >= 2 ? months[months.length - 2].cnt : null;
+  const subtitulo = role === 'super_admin'
+    ? `${plural(getWorkspaces().length, 'espacio')} · ${plural(DB.ejs.filter(e => e.activo !== false).length, 'persona activa', 'personas activas')} · ${plural(clis.length, 'cliente')}`
+    : role === 'admin'
+      ? `Resumen de tu equipo (${plural(team.length, 'persona')}) · ${plural(clis.length, 'cliente')}`
+      : [user.zona, plural(clis.length, 'cliente') + ' a tu cargo', `${modulosActivos} de ${MODULOS.length} módulos activos`].filter(Boolean).join(' · ');
 
   return (
     <div>
-      <div className="ph" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-        <div>{greeting()}, {ejecutivo?.nom || user?.nom || ''} <span style={{ background: role === 'super_admin' ? '#12212D' : role === 'admin' ? '#168A43' : '#E8BB26', color: role === 'usuario' ? '#12212D' : '#fff', padding: '3px 8px', borderRadius: 20, fontSize: 10, fontWeight: 800, marginLeft: 8 }}>{ROLE_LABEL[role]}</span></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: 'var(--grt)', background: '#fff', padding: '6px 10px', borderRadius: 20, border: '1px solid var(--grb)' }}>📅 {new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
-        </div>
-      </div>
-      <div className="ps">
-        {role === 'super_admin' && `Panel Super Admin — ${ws.length} espacios · ${getEjs().length} personas · Control total · ★ ${avgRating} calidad promedio`}
-        {role === 'admin' && `Panel Administrador — ${ejecutivo?.zona || ''} · Seguimiento mensual de tu equipo · ${team.length} personas`}
-        {role === 'usuario' && `Panel Usuario — ${ejecutivo?.zona || ''} · ${kpis.cli} clientes · ${Object.values(cfg).filter(Boolean).length}/${MODULOS.length} módulos activos`}
-      </div>
+      <PageHeader
+        title={`${saludo()}, ${user.nom.split(' ')[0]}`}
+        badge={ROLE_LABEL[role]}
+        subtitle={subtitulo}
+        actions={(
+          <PeriodPicker value={per} onChange={setPer} max={periodoActual()} />
+        )}
+      />
 
       <InsightBanner insight={insight} />
 
-      <SortTimePanel />
-
       <div className="kgrid">
-        <div className="kpi" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div className="kpi kpi-gauge">
           <Gauge pct={pct} />
           <div>
-            <div className="kl">Completitud mes</div>
-            <div className="kv" style={{ fontSize: 20 }}>{kpis.mes}/{kpis.cli}</div>
-            <div className="ks">{pct}% completado · {kpis.pend} pendientes</div>
+            <div className="kl">Informes de {fmtPerLong(per)}</div>
+            <div className="kv kv-md">{fmtNum(conInforme.length)} de {fmtNum(clis.length)}</div>
+            <div className="ks">{pendientes.length === 0 ? 'Todos los clientes tienen informe' : `Faltan ${plural(pendientes.length, 'cliente')}`}</div>
           </div>
         </div>
+        <Link to="/colaborativo" className={'kpi kpi-link' + (porValidar ? ' am' : '')}>
+          <div className="kl">Aportes por validar</div>
+          <div className="kv">{fmtNum(porValidar)}</div>
+          <div className="ks">{validados ? `${fmtNum(validados)} ya validados` : 'Esperan tu revisión'}</div>
+        </Link>
         <div className="kpi">
-          <div className="kl">{role === 'super_admin' ? 'Clientes totales' : 'Mis clientes'}</div>
-          <div className="kv">{kpis.cli}</div>
-          <div className="ks">{role === 'super_admin' ? `${getEjs().filter(u => u.role === 'usuario').length} usuarios activos` : (ejecutivo?.zona || user?.email || '')}</div>
+          <div className="kl">Informes en el período</div>
+          <div className="kv">{fmtNum(datos.infsPer.length)}</div>
+          <div className="ks">{fmtNum(infs.length)} en total</div>
+          <div className="kpi-delta"><Delta current={datos.infsPer.length} previous={prevCnt} /></div>
         </div>
-        <div className="kpi am">
-          <div className="kl">Informes este mes</div>
-          <div className="kv">{kpis.mes}</div>
-          <div className="ks">Pendientes: {kpis.pend} · Total histórico: {kpis.tot}</div>
-          <div style={{ marginTop: 4 }}><Delta current={kpis.mes} previous={prevMonthCnt} /></div>
-        </div>
-        <div className="kpi" style={{ borderLeftColor: '#E8BB26' }}>
+        <Link to="/guardados" className="kpi kpi-link am">
           <div className="kl">Calidad promedio</div>
-          <div className="kv" style={{ fontSize: 20 }}>{avgRating !== '—' ? avgRating + ' ★' : '—'}</div>
-          <div className="ks">{rated.length} informe{rated.length !== 1 ? 's' : ''} calificado{rated.length !== 1 ? 's' : ''}{role === 'usuario' ? ' (tuyos)' : ' (tu alcance)'}</div>
-        </div>
+          <div className="kv kv-md">{avg !== null ? fmtDec(avg) + ' ★' : '—'}</div>
+          <div className="ks">{rated.length ? plural(rated.length, 'informe calificado', 'informes calificados') : 'Aún sin calificaciones'}</div>
+        </Link>
       </div>
 
-      {/* Tendencia */}
+      {pendientes.length > 0 && (
+        <div className="card">
+          <div className="ct">Clientes sin informe en {fmtPerLong(per)}</div>
+          <ul className="todo-list">
+            {pendientes.slice(0, 6).map(c => (
+              <li key={c.id}>
+                <ClienteLogo cli={c} size={34} radius={8} />
+                <div className="todo-main">
+                  <div className="todo-t text-ellipsis">{c.nom}</div>
+                  <div className="todo-s text-ellipsis">{[c.ciu, DB.ejs.find(e => e.id === c.ejId)?.nom && 'Ejecutivo: ' + DB.ejs.find(e => e.id === c.ejId).nom].filter(Boolean).join(' · ')}</div>
+                </div>
+                <Link to={`/nuevo?cliente=${c.id}`} className="btn bvd bsm">Crear informe</Link>
+              </li>
+            ))}
+          </ul>
+          {pendientes.length > 6 && <div className="brow"><Link to="/clientes" className="btn bgh bsm">Ver los {fmtNum(pendientes.length)} clientes →</Link></div>}
+        </div>
+      )}
+
       <div className="card">
-        <div className="ct">📈 Tendencia — informes últimos 6 meses</div>
+        <div className="ct">Informes por mes (últimos 6 meses)</div>
         <TrendChart months={months} />
       </div>
 
       {role === 'super_admin' && (
-        <>
-          <div className="card" style={{ borderTop: '3px solid #12212D' }}>
-            <div className="ct">◆ Espacios — vista global</div>
-            <WorkspacesOverview workspaces={ws} />
-            <div className="brow"><Link to="/espacios" className="btn bvd bsm">Gestionar espacios →</Link><Link to="/aejecutivos" className="btn bgh bsm">Ver personas</Link></div>
-          </div>
+        <div className="card">
+          <div className="ct">Espacios de trabajo</div>
+          <WorkspacesOverview workspaces={getWorkspaces()} />
+          <div className="brow"><Link to="/espacios" className="btn bvd bsm">Gestionar espacios</Link><Link to="/aejecutivos" className="btn bgh bsm">Ver personas</Link></div>
+        </div>
+      )}
 
+      {esEquipo && (
+        <div className="card">
+          <div className="ct">{role === 'super_admin' ? 'Avance de todos los equipos' : 'Avance de mi equipo'} · {fmtPerLong(per)}</div>
+          <TeamGrid team={team} esperado={esperado} limit={role === 'super_admin' ? 6 : undefined} />
+          <div className="brow"><Link to="/equipo" className="btn bam bsm">Ver detalle del equipo →</Link></div>
+        </div>
+      )}
+
+      <div className="grid-2">
+        {esEquipo && (
           <div className="card">
-            <div className="ct">👥 Seguimiento de equipos — todos · Indicadores por ejecutivo</div>
-            <TeamGrid team={team} limit={6} />
-            <div className="brow"><Link to="/equipo" className="btn bam bsm">Ver detalle equipo →</Link></div>
+            <div className="ct">Módulos más usados en los informes</div>
+            <AdoptionChart infs={infs} />
           </div>
-
-          <div className="card" style={{ borderTop: '3px solid #12212D', background: '#FAFAFA' }}>
-            <div className="ct">⚙️ Mis módulos — configuración global Super Admin</div>
-            <MyModulesGrid cfg={cfg} />
-            <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span>Configuración guardada para <strong>{user?.email}</strong>.</span>
-              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📄 {mis.length} clientes totales</span>
-              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📊 {kpis.tot} informes históricos</span>
-            </div>
-            <div className="brow"><Link to="/config-modulos" className="btn bam bsm">Configurar módulos →</Link><Link to="/nuevo" className="btn bvd bsm">Nuevo informe</Link></div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>
-            <div className="card" style={{ marginBottom: 0 }}>
-              <div className="ct">🧩 Adopción de módulos — toda la organización</div>
-              <AdoptionChart infs={scopeInfs} />
-            </div>
-            <div className="card" style={{ marginBottom: 0 }}>
-              <div className="ct">⭐ Últimas calificaciones — feedback de clientes</div>
-              <RecentRatings ratings={ratedList} teamView />
-            </div>
-          </div>
-        </>
-      )}
-
-      {role === 'admin' && team.length > 0 && (
-        <>
-          <div className="card" style={{ borderTop: '3px solid #168A43' }}>
-            <div className="ct">👥 Mi equipo — seguimiento mensual con indicadores</div>
-            <TeamGrid team={team} />
-            <div className="brow"><Link to="/equipo" className="btn bvd bsm">Asignar clientes →</Link><Link to="/aejecutivos" className="btn bgh bsm">Gestionar personas</Link></div>
-          </div>
-
-          <div className="card" style={{ borderTop: '3px solid #168A43', background: '#FAFAFA' }}>
-            <div className="ct">⚙️ Mis módulos — configuración Administrador</div>
-            <MyModulesGrid cfg={cfg} />
-            <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span>Configuración guardada para <strong>{user?.email}</strong>.</span>
-              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📄 {mis.length} clientes</span>
-              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📊 {kpis.tot} informes históricos</span>
-            </div>
-            <div className="brow"><Link to="/config-modulos" className="btn bam bsm">Configurar módulos →</Link><Link to="/nuevo" className="btn bvd bsm">Nuevo informe</Link></div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>
-            <div className="card" style={{ marginBottom: 0 }}>
-              <div className="ct">🧩 Adopción de módulos — mi equipo</div>
-              <AdoptionChart infs={scopeInfs} />
-            </div>
-            <div className="card" style={{ marginBottom: 0 }}>
-              <div className="ct">⭐ Últimas calificaciones — mi equipo</div>
-              <RecentRatings ratings={ratedList} teamView />
-            </div>
-          </div>
-        </>
-      )}
-
-      {role === 'usuario' && (
-        <>
-          <div className="card" style={{ borderTop: '3px solid #E8BB26', background: '#FFFEF5' }}>
-            <div className="ct">⚙️ Mis módulos — lo que va a incluir tu próximo informe</div>
-            <MyModulesGrid cfg={cfg} />
-            <div style={{ fontSize: 11, color: 'var(--grt)', marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span>Configuración guardada para <strong>{user?.email}</strong>.</span>
-              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📄 {mis.length} clientes</span>
-              <span style={{ background: '#fff', padding: '4px 8px', borderRadius: 20, border: '1px solid var(--grb)' }}>📊 {kpis.tot} informes históricos</span>
-            </div>
-            <div className="brow"><Link to="/config-modulos" className="btn bam bsm">Configurar módulos →</Link><Link to="/nuevo" className="btn bvd bsm">Nuevo informe</Link></div>
-          </div>
-
-          <div className="card">
-            <div className="ct">⭐ Últimas calificaciones de mis clientes</div>
-            <RecentRatings ratings={ratedList} />
-          </div>
-        </>
-      )}
-
-      <div className="card">
-        <div className="ct">{role === 'super_admin' ? 'Clientes — vista global' : 'Mis clientes — acceso rápido'}</div>
-        {mis.length === 0 && <p style={{ color: 'var(--grt)', fontSize: 13 }}>No hay clientes asignados. {role === 'admin' && 'Asigna clientes en Mi equipo.'}</p>}
-        {mis.slice(0, 8).map(c => {
-          const ni = getInfCountForCli(c.id);
-          const last = getInfs().filter(i => i.cliId === c.id).sort((a, b) => (b.ts || '').localeCompare(a.ts || ''))[0];
-          return (
-            <div key={c.id} className="clcard">
-              <div className="clav">{c.nom.slice(0, 2).toUpperCase()}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="clnm">{c.nom}</div>
-                <div className="clmt">{[c.marca, c.ciu, c.sec].filter(Boolean).join(' · ')} {last ? '· Último: ' + last.per : '· Sin informes'}</div>
-              </div>
-              <div className="clri" style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-                {last?.rating && <span style={{ color: '#E8BB26', fontWeight: 800, fontSize: 12 }}>{'★'.repeat(last.rating)}</span>}
-                <span className="b bok">{ni} informe{ni !== 1 ? 's' : ''}</span>
-                <Link to="/nuevo" className="btn bvd bsm">+ Nuevo</Link>
-              </div>
-            </div>
-          );
-        })}
-        {mis.length > 8 && <div style={{ textAlign: 'center', marginTop: 8 }}><Link to="/clientes" className="btn bgh bsm">Ver todos ({mis.length}) →</Link></div>}
-      </div>
-
-      <div className="card">
-        <div className="ct">Acciones rápidas</div>
-        <div className="brow" style={{ marginTop: 0, gap: 8 }}>
-          <Link to="/nuevo" className="btn bvd">📊 Nuevo informe</Link>
-          <Link to="/config-modulos" className="btn bam">⚙️ Mis módulos</Link>
-          <Link to="/guardados" className="btn bgh">📋 Guardados {rated.length > 0 && `· ${avgRating}★`}</Link>
-          {role !== 'usuario' && <Link to="/equipo" className="btn bgh">👥 Mi equipo</Link>}
-          {role === 'super_admin' && <Link to="/espacios" className="btn bgh">◆ Espacios</Link>}
+        )}
+        <div className="card">
+          <div className="ct">Últimas calificaciones de clientes</div>
+          {rated.length ? <RecentRatings ratings={rated} teamView={esEquipo} /> : (
+            <EmptyState icon="⭐" title="Aún no hay calificaciones">
+              Cuando entregues un informe, califícalo en <Link to="/guardados" className="link">Informes guardados</Link> para llevar el registro de cómo lo recibió el cliente.
+            </EmptyState>
+          )}
         </div>
       </div>
+
+      {!esEquipo && (
+        <div className="card">
+          <div className="ct">Módulos de mis informes</div>
+          <MyModulesGrid clientes={clis} />
+          <div className="brow"><Link to="/config-modulos" className="btn bam bsm">Cambiar en Mis módulos</Link><Link to="/nuevo" className="btn bvd bsm">Nuevo informe</Link></div>
+        </div>
+      )}
     </div>
   );
 }

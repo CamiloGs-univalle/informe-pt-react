@@ -1,21 +1,14 @@
 /**
  * db.js
  * ─────────────────────────────────────────────────────────────────────────
- * Low-level persistence layer - localStorage cache + Firestore sync.
- * 
- * NO SEED DATA IN CODE. All data comes from Firebase Firestore.
- * On startup: loads from Firestore → localStorage
- * On writes: localStorage → schedules Firestore sync
- * 
- * If Firestore is empty, the first super_admin creates data via UI.
+ * Capa de persistencia: Firestore es la fuente de verdad; localStorage es
+ * solo una copia de lectura para cuando no hay conexión.
+ *
+ * SIN DATOS EN EL CÓDIGO. `App.jsx` llama a `loadDB()` justo después de que
+ * la persona inicia sesión (antes no hay permisos para leer Firestore).
+ * En cada `saveDB()` se reescribe la copia local y se sincroniza a Firestore.
  */
 export const STORAGE_KEY = 'ps_v3';
-
-// NO DEFAULT DATA - empty arrays only
-const _DEFAULT_WORKSPACES = [];
-const _DEFAULT_AREAS = [];
-const _DEFAULT_EJS = [];
-const _DEFAULT_CLIS = [];
 
 /**
  * The single in-memory "database" object. Exported by reference so model
@@ -71,11 +64,6 @@ export function saveDB() {
     if (!check || JSON.parse(check).ejs.length !== DB.ejs.length) {
       console.warn('[DB] saveDB verification failed');
     }
-    console.log('[DB] localStorage saved:', { 
-      ejs: DB.ejs.length, 
-      clis: DB.clis.length, 
-      infs: DB.infs.length 
-    });
   } catch (e) { 
     console.error('[DB] saveDB localStorage error:', e); 
   }
@@ -100,11 +88,6 @@ export async function saveDBAsync() {
     if (!check || JSON.parse(check).ejs.length !== DB.ejs.length) {
       console.warn('[DB] saveDBAsync verification failed');
     }
-    console.log('[DB] localStorage saved (async):', { 
-      ejs: DB.ejs.length, 
-      clis: DB.clis.length, 
-      infs: DB.infs.length 
-    });
   } catch (e) { 
     console.error('[DB] saveDBAsync localStorage error:', e); 
     throw e;
@@ -151,33 +134,34 @@ function readFromStorage() {
 // NO migrateAndSeed - NO hardcoded defaults, NO demo data generation
 // Data comes from Firebase. If empty, super_admin creates via UI.
 
-/** Loads data from Firestore (source of truth) into local DB and localStorage. */
-export async function loadDB() {
-  console.log('[DB] Starting loadDB...');
-  
-  try {
-    const sync = await loadFirebaseSync();
-    const loaded = await sync.loadFromFirestore();
-    
-    if (!loaded) {
-      // Fallback: localStorage only (offline mode)
-      console.log('[DB] Firestore empty or failed, falling back to localStorage');
-      readFromStorage();
-      saveDB();
-    } else {
-      // Data loaded from Firestore, ensure localStorage matches
-      console.log('[DB] Data loaded from Firestore, saving to localStorage');
-      saveDB();
+let loadPromise = null;
+/** Estado de la última carga: 'firestore' | 'cache' | 'vacio'. La UI lo usa para avisar al usuario. */
+export const loadState = { source: null };
+
+/**
+ * Carga los datos desde Firestore (fuente de verdad). Es idempotente: varias
+ * llamadas simultáneas (import + React StrictMode) comparten una sola carga.
+ * Si Firestore no responde, se usa la copia local SIN sobrescribirla ni
+ * sincronizar nada de vuelta (así nunca se pisa Firestore con datos viejos).
+ */
+export function loadDB({ force = false } = {}) {
+  if (loadPromise && !force) return loadPromise;
+  loadPromise = (async () => {
+    try {
+      const sync = await loadFirebaseSync();
+      const loaded = await sync.loadFromFirestore();
+      if (loaded) {
+        loadState.source = 'firestore';
+        return true;
+      }
+    } catch (error) {
+      console.error('[DB] loadDB failed:', error);
     }
-    
-    console.log('[DB] loadDB completed successfully');
-    return true;
-  } catch (error) {
-    console.error('[DB] loadDB failed:', error);
-    // Last resort: try localStorage
     readFromStorage();
+    loadState.source = DB.ejs.length ? 'cache' : 'vacio';
     return false;
-  }
+  })();
+  return loadPromise;
 }
 
 /** Gets current sync status for debugging */
@@ -196,5 +180,12 @@ export function getSyncStatus() {
   };
 }
 
-// Auto-load on module import
-loadDB();
+
+/** Vacía la copia en memoria y la caché local (al cerrar sesión): los datos no deben quedar en un equipo compartido. */
+export function resetDB() {
+  DB.ejs = []; DB.clis = []; DB.infs = []; DB.workspaces = []; DB.areas = []; DB.moduloConfigs = {}; DB.contribuciones = [];
+  loadPromise = null;
+  loadState.source = null;
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* sin almacenamiento */ }
+  loadFirebaseSync().then(sync => sync?.disableFirebaseSync?.()).catch(() => {});
+}

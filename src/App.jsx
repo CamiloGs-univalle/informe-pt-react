@@ -1,103 +1,132 @@
 /**
  * App.jsx
  * ─────────────────────────────────────────────────────────────────────────
- * Composition root: bootstraps the local "database", listens for Firebase
- * auth state, and renders either the Login view or the authenticated
- * route tree (`routes/AppRoutes.jsx`). Session/role switching logic lives
- * here because it is cross-cutting (needed by Login, Layout and the route
- * guards alike) rather than belonging to any single page.
+ * Raíz de la aplicación. Orquesta la sesión en este orden:
+ *
+ *   1. Firebase Auth informa si hay una sesión (se restaura sola al recargar).
+ *   2. Con sesión → se cargan los datos desde Firestore (ya autenticados).
+ *   3. Se busca el perfil de la persona por correo (rol, área, clientes…).
+ *      Si no está registrada o está inactiva, se cierra la sesión y se avisa.
+ *   4. El super admin puede "ver como" otra persona sin perder su propia
+ *      sesión (`viewAs`) y volver con un clic.
  */
 import './assets/styles/global.css';
+import './assets/styles/app.css';
 import { HashRouter } from 'react-router-dom';
-import { useState, useEffect } from 'react';
-import { loadDB } from './models/db';
-import { getEjs, getCurrentUser, setCurrentUser, clearCurrentUser } from './models/Ejecutivo';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './config/firebase';
-import { ToastProvider } from './views/common/Toast';
+import { loadDB, resetDB } from './models/db';
+import { getEjs, getUserByEmail, getEj } from './models/Ejecutivo';
+import { logout } from './controllers/authController';
+import { ViewAsContext } from './views/common/ViewAs';
+import { UIProvider } from './views/common/UIProvider';
+import Splash from './views/common/Splash';
 import Login from './views/pages/Login';
 import AppRoutes from './routes/AppRoutes';
 
+const VIEW_AS_KEY = 'ps_view_as';
+
+function readViewAs() {
+  try { return sessionStorage.getItem(VIEW_AS_KEY) || ''; } catch { return ''; }
+}
+function writeViewAs(id) {
+  try { if (id) sessionStorage.setItem(VIEW_AS_KEY, id); else sessionStorage.removeItem(VIEW_AS_KEY); } catch { /* sin almacenamiento */ }
+}
+
 export default function App() {
-  const [user, setUser] = useState(() => getCurrentUser());
-  const [ejs, setEjs] = useState([]);
-  const [dbReady, setDbReady] = useState(false);
+  // status: 'boot' (esperando a Firebase) | 'out' | 'loading' | 'in'
+  const [status, setStatus] = useState('boot');
+  const [realUserId, setRealUserId] = useState('');
+  const [viewAsId, setViewAsId] = useState(readViewAs);
+  const [authError, setAuthError] = useState('');
+  const [version, setVersion] = useState(0); // fuerza re-render tras recargar datos
 
   useEffect(() => {
-    let mounted = true;
-    loadDB().then(() => {
-      if (mounted) {
-        setEjs(getEjs());
-        setDbReady(true);
+    let cancelled = false;
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (cancelled) return;
+      if (!fbUser) {
+        resetDB();
+        setRealUserId('');
+        setStatus('out');
+        return;
       }
+      setStatus('loading');
+      const cargo = await loadDB({ force: true });
+      if (cancelled) return;
+      const perfil = getUserByEmail(fbUser.email);
+      if (!perfil) {
+        setAuthError(cargo
+          ? `La cuenta ${fbUser.email} no está registrada en la plataforma. Pide al administrador que te agregue con este correo.`
+          : `La contraseña es correcta, pero no se pudieron leer los datos de la plataforma (revisa la conexión o las reglas de Firestore). Cuenta: ${fbUser.email}.`);
+        await logout();
+        return;
+      }
+      if (perfil.activo === false) {
+        setAuthError('Tu usuario está desactivado. Contacta al administrador.');
+        await logout();
+        return;
+      }
+      setAuthError('');
+      setRealUserId(perfil.id);
+      setStatus('in');
     });
-    return () => { mounted = false; };
+    return () => { cancelled = true; unsub(); };
   }, []);
 
-  // Firebase auth listener (opcional, no bloquea). Se suscribe una sola vez;
-  // usa la forma funcional de setUser (en vez de leer `user` del closure)
-  // para evitar vincular una sesión de Firebase por encima de una sesión
-  // local que ya haya iniciado después del montaje.
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (fbUser) => {
-      if (!fbUser) return;
-      setUser((prevUser) => {
-        if (prevUser) return prevUser;
-        // si hay sesión Firebase pero no local, intentar vincular
-        const local = getEjs().find(u => (u.email || '').toLowerCase() === (fbUser.email || '').toLowerCase());
-        if (!local) return prevUser;
-        setCurrentUser(local);
-        return local;
-      });
-    });
-    return () => unsub && unsub();
+  const realUser = status === 'in' ? getEj(realUserId) : null;
+  const esSuper = realUser?.role === 'super_admin';
+
+  // La persona "efectiva": quien aparece en pantalla (la real o aquella a la que el super admin está viendo).
+  const user = useMemo(() => {
+    if (!realUser) return null;
+    if (esSuper && viewAsId && viewAsId !== realUser.id) return getEj(viewAsId) || realUser;
+    return realUser;
+    // `version` fuerza a recalcular cuando se editan personas
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realUser, esSuper, viewAsId, version]);
+
+  const handleViewAs = useCallback((id) => {
+    const next = id && id !== realUserId ? id : '';
+    writeViewAs(next);
+    setViewAsId(next);
+    setVersion(v => v + 1);
+  }, [realUserId]);
+
+  const handleLogout = useCallback(async () => {
+    writeViewAs('');
+    setViewAsId('');
+    await logout();
   }, []);
 
-  const handleLogin = (id, userObj) => {
-    const u = userObj || getEjs().find(x => x.id === id) || getCurrentUser();
-    if (!u) return;
-    setCurrentUser(u);
-    setUser(u);
-    setEjs(getEjs());
-  };
+  if (status === 'boot') return <Splash text="Iniciando…" />;
+  if (status === 'loading') return <Splash text="Cargando tus datos…" />;
 
-  const handleLogout = async () => {
-    try { await auth.signOut(); } catch (e) { /* already signed out / offline */ }
-    clearCurrentUser();
-    setUser(null);
-  };
-
-  const handleEjChange = (id) => {
-    // solo super_admin puede suplantar
-    if (user?.role !== 'super_admin') return;
-    const target = getEjs().find(x => x.id === id);
-    if (target) { setCurrentUser(target); setUser(target); }
-  };
-
-  if (!dbReady) {
+  if (status === 'out' || !user) {
     return (
-      <div style={{display:'flex',height:'100vh',alignItems:'center',justifyContent:'center',background:'#F1F3EF'}}>
-        <div style={{textAlign:'center'}}>
-          <div style={{fontSize:24,marginBottom:16,color:'#168A43'}}>⚙️</div>
-          <div style={{fontSize:16,color:'#12212D'}}>Cargando datos desde Firebase...</div>
-        </div>
-      </div>
+      <UIProvider>
+        <Login externalError={authError} onClearError={() => setAuthError('')} />
+      </UIProvider>
     );
   }
 
-  if (!user) {
-    return (
-      <ToastProvider>
-        <Login onLogin={handleLogin} />
-      </ToastProvider>
-    );
-  }
+  // Entrar como otra persona y empezar en su pantalla de inicio.
+  const verComo = (id) => { handleViewAs(id); window.location.hash = '#/'; };
 
   return (
-    <ToastProvider>
+    <UIProvider>
+      <ViewAsContext.Provider value={{ puede: esSuper, verComo }}>
       <HashRouter>
-        <AppRoutes user={user} ejId={user.id} ejs={ejs} onLogout={handleLogout} onEjChange={handleEjChange} />
+        <AppRoutes
+          user={user}
+          realUser={realUser}
+          ejs={getEjs()}
+          onLogout={handleLogout}
+          onViewAs={handleViewAs}
+        />
       </HashRouter>
-    </ToastProvider>
+      </ViewAsContext.Provider>
+    </UIProvider>
   );
 }

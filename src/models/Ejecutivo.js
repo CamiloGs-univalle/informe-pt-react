@@ -8,8 +8,7 @@
  */
 import { DB, saveDB } from './db';
 import { ROLES } from './constants';
-
-const AUTH_KEY = 'ps_auth_user';
+import { nuevoId } from '../utils/ids';
 
 /** Returns every Ejecutivo record. */
 export function getEjs() {
@@ -67,7 +66,7 @@ export function getUsersForAdmin(adminId) {
 export function saveEj(data, actor) {
   if (data.email) data.email = data.email.toLowerCase().trim();
   if (!data.role) data.role = 'usuario';
-  if (!data.password) data.password = 'Proservis2026';
+  delete data.password; // las credenciales viven solo en Firebase Authentication
   // Hierarchy enforcement: only super_admin can create super_admin
   if (data.role === ROLES.SUPER_ADMIN && actor && actor.role !== ROLES.SUPER_ADMIN) {
     throw new Error('Solo Super Admin puede crear Super Admin');
@@ -76,6 +75,9 @@ export function saveEj(data, actor) {
   if (actor && actor.role === ROLES.ADMIN && data.workspaceId && data.workspaceId !== actor.workspaceId) {
     // Allow but warn — admins are scoped to their workspace for visibility, not enforcement
   }
+  if (data.email && DB.ejs.some(x => x.id !== data.id && (x.email || '').toLowerCase() === data.email)) {
+    throw new Error('Ya existe una persona con ese correo.');
+  }
   if (data.id) {
     const e = DB.ejs.find(x => x.id === data.id);
     if (e) {
@@ -83,9 +85,10 @@ export function saveEj(data, actor) {
         throw new Error('No puedes modificar un Super Admin');
       }
       Object.assign(e, data);
+      delete e.password;
     }
   } else {
-    data.id = 'e' + Date.now();
+    data.id = nuevoId('e', DB.ejs);
     if (data.activo === undefined) data.activo = true;
     DB.ejs.push(data);
   }
@@ -102,59 +105,22 @@ export function canDeleteEj(actor, targetId) {
   return true;
 }
 
-/** Deletes an Ejecutivo by id. */
+/**
+ * Deletes an Ejecutivo by id y deja el resto de los datos consistente:
+ * sus clientes quedan sin ejecutivo, se le quita de las asignaciones por
+ * área y de la jefatura de áreas, y se borra su configuración de módulos.
+ * (Antes solo se borraba el registro y quedaban referencias huérfanas.)
+ */
 export function deleteEj(id) {
   DB.ejs = DB.ejs.filter(e => e.id !== id);
+  DB.clis.forEach(c => {
+    if (c.ejId === id) c.ejId = '';
+    Object.keys(c.asignaciones || {}).forEach(areaId => { if (c.asignaciones[areaId] === id) delete c.asignaciones[areaId]; });
+  });
+  DB.areas.forEach(a => { if (a.adminId === id) a.adminId = null; });
+  DB.contribuciones.forEach(ct => { if (ct.userId === id) ct.userId = null; });
+  Object.keys(DB.moduloConfigs).forEach(k => { if (k === id || k.startsWith(id + '_')) delete DB.moduloConfigs[k]; });
   saveDB();
-}
-
-/**
- * Local (offline/demo) authentication fallback, used when Firebase auth is
- * unavailable or fails. See `controllers/authController.js` for how this
- * combines with Firebase.
- *
- * Compares against the Ejecutivo's own stored `password` only — there is no
- * wildcard/master password. Passwords are still stored in plain text in
- * `localStorage`, which is acceptable for a local-only demo account but not
- * for real client data; see "Deuda técnica conocida" in
- * docs/ARCHITECTURE.md for the recommended hardening (hashing, or requiring
- * Firebase Authentication instead of this fallback).
- */
-export function authenticateLocal(email, password) {
-  const u = getUserByEmail(email);
-  if (!u) return null;
-  if (!u.activo) return null;
-  const pwd = (password || '').trim();
-  const stored = (u.password || '').trim();
-  if (!stored) return null;
-  return pwd === stored ? u : null;
-}
-
-/** Reads the current session user, re-hydrated against the latest DB record. */
-export function getCurrentUser() {
-  try {
-    const s = localStorage.getItem(AUTH_KEY);
-    if (!s) return null;
-    const parsed = JSON.parse(s);
-    const fresh = DB.ejs.find(u => u.id === parsed.id);
-    return fresh ? { ...fresh, _raw: parsed } : parsed;
-  } catch (e) { return null; }
-}
-
-/** Persists the current session user. */
-export function setCurrentUser(user) {
-  try {
-    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-    localStorage.setItem('ps_ej_activo', user.id);
-  } catch (e) { /* storage unavailable */ }
-}
-
-/** Clears the current session. */
-export function clearCurrentUser() {
-  try {
-    localStorage.removeItem(AUTH_KEY);
-    localStorage.removeItem('ps_ej_activo');
-  } catch (e) { /* storage unavailable */ }
 }
 
 /** Generic role check. */

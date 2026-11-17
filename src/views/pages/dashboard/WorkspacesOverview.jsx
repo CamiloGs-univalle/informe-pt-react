@@ -37,8 +37,8 @@ export default function WorkspacesOverview({ workspaces }) {
             {pct !== null && <Gauge pct={pct} size={44} stroke={5} />}
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 800, fontSize: 13 }}>{w.nombre}</div>
-              <div style={{ fontSize: 11, color: 'var(--grt)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.descripcion}</div>
-              <div style={{ fontSize: 11, marginTop: 4, color: 'var(--vd)', fontWeight: 700 }}>{getAreas(w.id).length} áreas · {clientesCount} clientes</div>
+              <div style={{ fontSize: 12, color: 'var(--grt)', overflowWrap: 'anywhere' }}>{w.descripcion}</div>
+              <div style={{ fontSize: 12, marginTop: 4, color: 'var(--vd)', fontWeight: 700 }}>{getAreas(w.id).length} áreas · {clientesCount} clientes</div>
             </div>
           </div>
         );

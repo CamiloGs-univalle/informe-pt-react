@@ -1,106 +1,103 @@
 /**
- * views/pages/tablero/ClientProgressCard.jsx
- * ─────────────────────────────────────────────────────────────────────────
- * Una tarjeta por cliente: anillo de avance, chip por área (con quién y
- * cuándo actualizó), la ficha técnica de Selección cuando hay datos, y las
- * acciones (validar/rechazar por área, previsualizar, exportar).
+ * Tarjeta de un cliente en el tablero del líder: avance, estado por área
+ * (con quién subió y cuándo), ficha de Selección y las acciones del informe.
  */
 import { ESTADO_META, ESTADOS } from '../../../models/Contribucion';
-import { timeAgo } from '../../../utils/format';
+import { timeAgo, fmtNum, plural } from '../../../utils/format';
 import { Gauge } from '../dashboard/charts';
+import ClienteLogo from '../../common/ClienteLogo';
 
-function AreaChip({ area, contrib, onValidar, onRechazar }) {
+function AreaChip({ area, contrib, quien, onValidar, onRechazar, onVer }) {
   const estado = contrib?.estado || ESTADOS.PENDIENTE;
   const meta = ESTADO_META[estado];
   const puedeDecidir = estado === ESTADOS.COMPLETADO;
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', gap: 4, background: meta.bg, border: '1px solid ' + meta.color + '33',
-      borderRadius: 8, padding: '7px 9px', minWidth: 150,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <span style={{ fontSize: 13 }}>{meta.icon}</span>
-        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--tx)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{area.nombre}</span>
+    <div className="tb-area" style={{ background: meta.bg, borderColor: meta.color + '55' }}>
+      <div className="tb-area-top">
+        <span aria-hidden="true">{meta.icon}</span>
+        <span className="tb-area-n" title={area.nombre}>{area.nombre}</span>
       </div>
-      <div style={{ fontSize: 10, fontWeight: 700, color: meta.color }}>{meta.label}</div>
-      <div style={{ fontSize: 9, color: 'var(--grt)' }}>{contrib ? timeAgo(contrib.updatedAt) : 'sin actividad'}</div>
+      <div className="tb-area-st" style={{ color: estado === ESTADOS.COMPLETADO ? '#7A6010' : meta.color }}>{meta.label}</div>
+      <div className="tb-area-sub">
+        {quien ? <>{quien}{contrib ? ' · ' + timeAgo(contrib.updatedAt) : ''}</> : 'Sin responsable asignado'}
+      </div>
+      {estado === ESTADOS.RECHAZADO && contrib?.obs && <div className="tb-area-obs" title={contrib.obs}>“{contrib.obs}”</div>}
       {puedeDecidir && (
-        <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
-          <button className="btn bvd bsm" style={{ fontSize: 9, padding: '2px 6px', flex: 1 }} onClick={onValidar}>✅ Validar</button>
-          <button className="btn bro bsm" style={{ fontSize: 9, padding: '2px 6px', flex: 1 }} onClick={onRechazar}>↩️</button>
+        <div className="tb-area-act">
+          <button type="button" className="btn bvd bsm" onClick={onValidar}>Validar</button>
+          <button type="button" className="btn bro bsm" onClick={onRechazar}>Pedir corrección</button>
         </div>
+      )}
+      {estado !== ESTADOS.PENDIENTE && !puedeDecidir && (
+        <button type="button" className="btn bgh bsm tb-area-ver" onClick={onVer}>Ver aporte</button>
       )}
     </div>
   );
 }
 
-export default function ClientProgressCard({
-  cli, areas, contribs, pct, todoListo, todoValidado,
-  ficha, onValidar, onRechazar, onPreview, onExport, exporting,
-}) {
-  const borderColor = todoValidado ? '#168A43' : pct >= 50 ? '#E8BB26' : '#DDE4DD';
+export default function ClientProgressCard({ cli, filas, pct, listo, ficha, ejecutivo, onValidar, onRechazar, onVer, onPreview, onGuardar, onExport, ocupado, informeGuardado }) {
+  const todoValidado = filas.length > 0 && filas.every(f => f.contrib?.estado === ESTADOS.VALIDADO);
+  const tono = todoValidado ? 'tono-ok' : pct >= 50 ? 'tono-warn' : '';
+  const hayAlgo = filas.some(f => f.contrib && f.contrib.estado !== ESTADOS.PENDIENTE);
+  const sinValidar = filas.filter(f => f.contrib && f.contrib.estado !== ESTADOS.VALIDADO && f.contrib.estado !== ESTADOS.PENDIENTE).length;
   return (
-    <div className="card" style={{ borderLeft: '4px solid ' + borderColor, marginBottom: 0 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <Gauge pct={pct} size={46} stroke={5} />
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 14 }}>
-              {cli.nom}{todoValidado && <span style={{ marginLeft: 6 }} title="Todo validado">🎉</span>}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--grt)' }}>{cli.nit || 'sin NIT'} · {contribs.length ? `${resumenLabel(contribs)}` : 'Sin contribuciones aún'}</div>
+    <div className={'tb-card ' + tono}>
+      <div className="tb-head">
+        <ClienteLogo cli={cli} size={44} />
+        <div className="tb-id">
+          <div className="tb-nom">{cli.nom}</div>
+          <div className="tb-meta">
+            {cli.ciu || 'Sin ciudad'}{ejecutivo ? ' · Líder: ' + ejecutivo : ' · Sin ejecutivo líder'}
+            {informeGuardado && <span className="chip vd" style={{ marginLeft: 8 }}>Informe guardado</span>}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button className="btn bgh bsm" onClick={onPreview} disabled={exporting === 'preview'}>{exporting === 'preview' ? '⏳' : '👁'} Vista previa</button>
-          <button className="btn bgh bsm" onClick={() => onExport('html')} disabled={!!exporting}>{exporting === 'html' ? '⏳' : '📄'} HTML</button>
-          <button className="btn bvd bsm" onClick={() => onExport('pdf')} disabled={!!exporting}>{exporting === 'pdf' ? '⏳' : '📑'} PDF</button>
-          <button className="btn bsm" style={{ background: '#E85D04', color: '#fff' }} onClick={() => onExport('pptx')} disabled={!!exporting}>{exporting === 'pptx' ? '⏳' : '📊'} PPTX</button>
-        </div>
+        <Gauge pct={pct} size={50} stroke={6} />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-        {areas.map(a => {
-          const ct = contribs.find(x => x.areaId === a.id);
-          return (
-            <AreaChip key={a.id} area={a} contrib={ct}
-              onValidar={() => onValidar(a.id)} onRechazar={() => onRechazar(a.id, a.nombre)} />
-          );
-        })}
+      <div className="tb-areas">
+        {filas.map(f => (
+          <AreaChip key={f.area.id} area={f.area} contrib={f.contrib} quien={f.quien}
+            onValidar={() => onValidar(f.area)} onRechazar={() => onRechazar(f.area)} onVer={() => onVer(f.area, f.contrib)} />
+        ))}
+        {!filas.length && <div className="text-muted" style={{ fontSize: 13 }}>Este cliente no tiene áreas asignadas todavía. Asígnalas en Clientes y asignaciones.</div>}
       </div>
 
-      {ficha.fichaSel ? (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--vd)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Ficha de Selección</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, background: '#FBFDFB', border: '1px solid #E8EAE8', borderRadius: 8, padding: 8 }}>
-            <Stat label="Oportunidad" sub="Cobertura a tiempo" value={ficha.oportunidad + '%'} tone={ficha.oportunidad} />
-            <Stat label="Efectividad" sub={ficha.totalCon + '/' + ficha.totalSol} value={ficha.efectividad + '%'} tone={ficha.efectividad} />
-            <Stat label="Tiempo resp." sub="Promedio" value={ficha.tiempoProm + ' días'} tone={ficha.tiempoProm <= 5 ? 100 : ficha.tiempoProm <= 10 ? 60 : 0} />
-            <Stat label="Vacantes activas" sub="Pendientes" value={String(ficha.vacAct)} tone={ficha.vacAct === 0 ? 100 : ficha.vacAct <= 3 ? 60 : 0} last />
+      {ficha && (
+        <div className="tb-ficha">
+          <div className="tb-ficha-t">Ficha de Selección</div>
+          <div className="tb-ficha-g">
+            <Stat label="Efectividad" value={ficha.efectividad + '%'} sub={`${fmtNum(ficha.totalCon)} de ${fmtNum(ficha.totalSol)}`} tone={ficha.efectividad} />
+            <Stat label="Oportunidad" value={ficha.oportunidad + '%'} sub="Cobertura a tiempo" tone={ficha.oportunidad} />
+            <Stat label="Tiempo de respuesta" value={fmtNum(ficha.tiempoProm) + ' d'} sub="Promedio" tone={ficha.tiempoProm <= 5 ? 100 : ficha.tiempoProm <= 10 ? 60 : 0} />
+            <Stat label="Vacantes activas" value={fmtNum(ficha.vacAct)} sub="Pendientes" tone={ficha.vacAct === 0 ? 100 : ficha.vacAct <= 3 ? 60 : 0} />
           </div>
-        </div>
-      ) : (
-        <div style={{ fontSize: 10, color: '#8D6E00', background: '#FDF6D8', padding: '6px 8px', borderRadius: 6, marginTop: 10, textAlign: 'center' }}>
-          Selección aún no ha subido su ficha — aparecerá aquí en cuanto la complete.
         </div>
       )}
+
+      <div className="tb-foot">
+        <span className="text-muted" style={{ fontSize: 13 }}>
+          {!hayAlgo ? 'Aún no hay aportes de las áreas.' : todoValidado ? 'Todo validado: ya puedes cerrar el informe.' : sinValidar ? `${plural(sinValidar, 'aporte')} sin validar.` : 'Esperando a las áreas.'}
+        </span>
+        <div className="tb-btns">
+          <button type="button" className="btn bgh bsm" onClick={onPreview} disabled={!!ocupado || !hayAlgo} title={hayAlgo ? '' : 'Se habilita cuando un área suba su parte'}>{ocupado === 'preview' ? 'Armando…' : 'Vista previa'}</button>
+          <button type="button" className="btn bvd bsm" onClick={onGuardar} disabled={!!ocupado || !hayAlgo}>{ocupado === 'guardar' ? 'Guardando…' : informeGuardado ? 'Actualizar informe guardado' : 'Guardar informe final'}</button>
+          <button type="button" className="btn bgh bsm" onClick={() => onExport('pdf')} disabled={!!ocupado || !hayAlgo}>{ocupado === 'pdf' ? 'Generando…' : 'PDF'}</button>
+          <button type="button" className="btn bgh bsm" onClick={() => onExport('pptx')} disabled={!!ocupado || !hayAlgo}>{ocupado === 'pptx' ? 'Generando…' : 'PowerPoint'}</button>
+          <button type="button" className="btn bgh bsm" onClick={() => onExport('html')} disabled={!!ocupado || !hayAlgo}>HTML</button>
+        </div>
+      </div>
+      {listo && !todoValidado && <div className="text-muted" style={{ fontSize: 12 }}>Puedes generar el informe aunque falten validaciones; quedará con lo que haya hoy.</div>}
     </div>
   );
 }
 
-function resumenLabel(contribs) {
-  const completadas = contribs.filter(c => c.estado === ESTADOS.COMPLETADO || c.estado === ESTADOS.VALIDADO).length;
-  const pendientes = contribs.filter(c => c.estado === ESTADOS.PENDIENTE).length;
-  return `${completadas} completadas · ${pendientes} pendientes`;
-}
-
-function Stat({ label, sub, value, tone, last }) {
-  const color = tone >= 80 ? '#168A43' : tone >= 50 ? '#E8BB26' : '#C0392B';
+function Stat({ label, sub, value, tone }) {
+  const color = tone >= 80 ? '#168A43' : tone >= 50 ? '#8D6E00' : '#C0392B';
   return (
-    <div style={{ textAlign: 'center', borderRight: last ? 'none' : '1px solid #E8EAE8' }}>
-      <div style={{ fontSize: 8, fontWeight: 800, color: 'var(--grt)', textTransform: 'uppercase' }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 800, color }}>{value}</div>
-      <div style={{ fontSize: 9, color: 'var(--grt)' }}>{sub}</div>
+    <div className="tb-stat">
+      <div className="tb-stat-l">{label}</div>
+      <div className="tb-stat-v" style={{ color }}>{value}</div>
+      <div className="tb-stat-s">{sub}</div>
     </div>
   );
 }
